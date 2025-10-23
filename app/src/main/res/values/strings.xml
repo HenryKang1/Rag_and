@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Local LLM</string>
+    <string name="enter_your_prompt">Enter your prompt</string>
+    <string name="send">SEND</string>
+    <string name="stop">STOP</string>
+    <string name="enable_thinking_mode">Enable Thinking Mode</string>
+    <string name="clear_chat">Clear Chat</string>
+    <string name="enable_thinking">Enable Thinking</string>
+    <string name="clear_chat_title">Clear Chat?</string>
+    <string name="clear_chat_message">This will remove all messages.</string>
+    <string name="yes">Yes</string>
+    <string name="cancel">Cancel</string>
+    <string name="rag_enabled">RAG enabled</string>
+    <string name="rag_disabled">RAG disabled</string>
+    <string name="thinking_mode_on">🤔 Thinking Mode ON\n(Slower but more thoughtful responses)</string>
+    <string name="fast_mode_on">⚡ Fast Mode ON\n(Quicker responses, less reasoning)</string>
+    <string name="chunking_mode_semantic">Chunking mode: SEMANTIC</string>
+    <string name="chunking_mode_fixed">Chunking mode: FIXED-SIZE</string>
+    <string name="model_ready">✅ Model is ready.</string>
+    <string name="rag_initialized">📚 RAG system initialized</string>
+</resources>
