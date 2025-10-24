@@ -134,11 +134,14 @@ class MobileRAG(private val context: Context) {
             return@withContext emptyList()
         }
         
+        val searchStartTime = System.currentTimeMillis()
         LoggingUtils.logSectionStart(TAG, "SEARCH")
         LoggingUtils.logRAGDebug(TAG, "Query: '$query'")
         LoggingUtils.logRAGDebug(TAG, "Total chunks available: ${chunks.size}")
         
-        // First, try direct keyword search for SPECIFIC matches
+        // === 1. 키워드 스캔 단계 ===
+        val keywordScanStartTime = System.currentTimeMillis()
+        LoggingUtils.logRAGDebug(TAG, "=== KEYWORD SCAN PHASE ===")
         LoggingUtils.logRAGDebug(TAG, "Performing keyword search...")
         val keywordResults = mutableListOf<Pair<Int, Float>>()
         val queryLower = query.lowercase()
@@ -149,6 +152,7 @@ class MobileRAG(private val context: Context) {
         if (importantKeywords.isEmpty()) {
             LoggingUtils.logRAGDebug(TAG, "No specific keywords found, using embedding search only")
         } else {
+            // 모든 청크를 소문자로 변환한 뒤 키워드와 contains 비교
             chunks.forEachIndexed { index, chunk ->
                 val chunkLower = chunk.lowercase()
                 
@@ -191,15 +195,32 @@ class MobileRAG(private val context: Context) {
             keywordResults.addAll(topKeywordResults)
         }
         
-        LoggingUtils.logRAGDebug(TAG, "Total chunks scanned: ${chunks.size}")
-        LoggingUtils.logRAGDebug(TAG, "Chunks containing keywords: ${keywordResults.size}")
+        val keywordScanEndTime = System.currentTimeMillis()
+        val keywordScanTime = keywordScanEndTime - keywordScanStartTime
+        LoggingUtils.logRAGDebug(TAG, "=== KEYWORD SCAN COMPLETED ===")
+        LoggingUtils.logRAGDebug(TAG, "- Total chunks scanned: ${chunks.size}")
+        LoggingUtils.logRAGDebug(TAG, "- Chunks containing keywords: ${keywordResults.size}")
+        LoggingUtils.logRAGDebug(TAG, "- Keyword scan time: ${keywordScanTime}ms")
+        LoggingUtils.logRAGDebug(TAG, "- Scan speed: ${chunks.size * 1000.0 / keywordScanTime} chunks/sec")
+        
+        // PerformanceLogger를 사용한 상세 분석
+        PerformanceLogger.logSearchPerformance(
+            keywordScanTime = keywordScanTime,
+            embeddingTime = 0L, // 아직 측정되지 않음
+            sortingTime = 0L,  // 아직 측정되지 않음
+            totalChunks = chunks.size,
+            keywordMatches = keywordResults.size,
+            embeddingCount = 0
+        )
         
         // If we found direct keyword matches, prioritize them
         if (keywordResults.isNotEmpty()) {
             LoggingUtils.logRAGDebug(TAG, "Found ${keywordResults.size} keyword matches, using them as priority")
         }
         
-        // Encode query
+        // === 2. 임베딩 유사도 계산 단계 ===
+        val embeddingStartTime = System.currentTimeMillis()
+        LoggingUtils.logRAGDebug(TAG, "=== EMBEDDING SIMILARITY PHASE ===")
         LoggingUtils.logRAGDebug(TAG, "Encoding query for semantic search...")
         val queryEmbedding = embeddingModel?.encode(query)
             ?: throw IllegalStateException("Embedding model not initialized")
@@ -215,6 +236,20 @@ class MobileRAG(private val context: Context) {
                 LoggingUtils.logRAGDebug(TAG, "Chunk $index similarity: $similarity")
             }
         }
+        
+        val embeddingEndTime = System.currentTimeMillis()
+        val embeddingTime = embeddingEndTime - embeddingStartTime
+        val embeddingCount = embeddings?.size ?: 0
+        val operationsPerSecond = embeddingCount * 384 * 1000.0 / embeddingTime  // 384차원 벡터 연산
+        LoggingUtils.logRAGDebug(TAG, "=== EMBEDDING SIMILARITY COMPLETED ===")
+        LoggingUtils.logRAGDebug(TAG, "- Embeddings processed: $embeddingCount")
+        LoggingUtils.logRAGDebug(TAG, "- Embedding similarity time: ${embeddingTime}ms")
+        LoggingUtils.logRAGDebug(TAG, "- Operations per second: ${String.format("%.0f", operationsPerSecond)} ops/sec")
+        LoggingUtils.logRAGDebug(TAG, "- Total operations: ${embeddingCount * 384} (${embeddingCount} × 384 dimensions)")
+        
+        // === 3. 정렬과 재랭킹 단계 ===
+        val sortingStartTime = System.currentTimeMillis()
+        LoggingUtils.logRAGDebug(TAG, "=== SORTING AND RERANKING PHASE ===")
         
         // Sort and get top-k (remove duplicates)
         scores.sortByDescending { it.second }
@@ -277,6 +312,12 @@ class MobileRAG(private val context: Context) {
         }
         
         val rerankedResults = combinedResults
+        val sortingEndTime = System.currentTimeMillis()
+        val sortingTime = sortingEndTime - sortingStartTime
+        
+        LoggingUtils.logRAGDebug(TAG, "=== SORTING AND RERANKING COMPLETED ===")
+        LoggingUtils.logRAGDebug(TAG, "- Sorting and reranking time: ${sortingTime}ms")
+        LoggingUtils.logRAGDebug(TAG, "- Results processed: ${rerankedResults.size}")
         
         LoggingUtils.logRAGDebug(TAG, "After reranking:")
         rerankedResults.take(3).forEachIndexed { idx, (chunkIdx, score) ->
@@ -284,6 +325,28 @@ class MobileRAG(private val context: Context) {
             LoggingUtils.logRAGDebug(TAG, "  ${idx+1}. Chunk #$chunkIdx (final score: $score): $preview...")
         }
         LoggingUtils.logRAGDebug(TAG, "Found ${rerankedResults.size} relevant chunks")
+        
+        // === 전체 검색 성능 요약 ===
+        val searchEndTime = System.currentTimeMillis()
+        val totalSearchTime = searchEndTime - searchStartTime
+        LoggingUtils.logRAGDebug(TAG, "=== SEARCH PERFORMANCE SUMMARY ===")
+        LoggingUtils.logRAGDebug(TAG, "- Total search time: ${totalSearchTime}ms")
+        LoggingUtils.logRAGDebug(TAG, "- Keyword scan: ${keywordScanTime}ms (${String.format("%.1f", keywordScanTime * 100.0 / totalSearchTime)}%)")
+        LoggingUtils.logRAGDebug(TAG, "- Embedding similarity: ${embeddingTime}ms (${String.format("%.1f", embeddingTime * 100.0 / totalSearchTime)}%)")
+        LoggingUtils.logRAGDebug(TAG, "- Sorting and reranking: ${sortingTime}ms (${String.format("%.1f", sortingTime * 100.0 / totalSearchTime)}%)")
+        LoggingUtils.logRAGDebug(TAG, "- Total chunks processed: ${chunks.size}")
+        LoggingUtils.logRAGDebug(TAG, "- Search throughput: ${chunks.size * 1000.0 / totalSearchTime} chunks/sec")
+        
+        // PerformanceLogger를 사용한 최종 검색 성능 분석
+        PerformanceLogger.logSearchPerformance(
+            keywordScanTime = keywordScanTime,
+            embeddingTime = embeddingTime,
+            sortingTime = sortingTime,
+            totalChunks = chunks.size,
+            keywordMatches = keywordResults.size,
+            embeddingCount = embeddings?.size ?: 0
+        )
+        
         LoggingUtils.logSectionEnd(TAG, "SEARCH")
         
         return@withContext rerankedResults.map { (index, score) ->

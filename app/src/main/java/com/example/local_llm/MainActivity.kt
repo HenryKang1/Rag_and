@@ -231,8 +231,14 @@ class MainActivity : AppCompatActivity() {
                     delay(500) // Give system time to free memory
                 }
                 
+                // === 전체 RAG + 인퍼런스 성능 측정 시작 ===
+                val totalStartTime = System.currentTimeMillis()
+                LoggingUtils.logSectionStart("MainActivity", "TOTAL RAG + INFERENCE PERFORMANCE")
+                LoggingUtils.logContextDebug("MainActivity", "=== MOBILE RAG + LLM PERFORMANCE ANALYSIS ===")
+                
                 // Get RAG context if enabled
                 var finalPrompt = userPrompt
+                var contextTime = 0L  // RAG 검색 시간을 저장할 변수
                 if (isRagEnabled && ragInitialized) {
                     LoggingUtils.logSectionStart("MainActivity", "RAG CONTEXT RETRIEVAL")
                     LoggingUtils.logContextDebug("MainActivity", "RAG enabled: $isRagEnabled, RAG initialized: $ragInitialized")
@@ -244,11 +250,18 @@ class MainActivity : AppCompatActivity() {
                     }
                     
                     try {
+                        val contextStartTime = System.currentTimeMillis()
+                        LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH PERFORMANCE ===")
                         LoggingUtils.logContextDebug("MainActivity", "Calling mobileRAG.getContext()...")
                         val context = mobileRAG.getContext(userPrompt)
-                        LoggingUtils.logContextDebug("MainActivity", "Raw context received:")
+                        val contextEndTime = System.currentTimeMillis()
+                        contextTime = contextEndTime - contextStartTime
+                        
+                        LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH RESULTS ===")
                         LoggingUtils.logContextDebug("MainActivity", "- Length: ${context.length} chars")
+                        LoggingUtils.logContextDebug("MainActivity", "- Context retrieval time: ${contextTime}ms")
                         LoggingUtils.logContextDebug("MainActivity", "- Empty: ${context.isEmpty()}")
+                        LoggingUtils.logContextDebug("MainActivity", "- Search speed: ${context.length * 1000.0 / contextTime} chars/sec")
                         LoggingUtils.logContextDebug("MainActivity", "- Full context content:")
                         LoggingUtils.logLongText("MainActivity", "[CONTEXT DEBUG]", context, Constants.Logging.CHUNK_SIZE)
                         
@@ -283,6 +296,7 @@ class MainActivity : AppCompatActivity() {
                 
                 // Build prompt for llama.cpp
                 LoggingUtils.logSectionStart("MainActivity", "PROMPT BUILDING")
+                val promptStartTime = System.currentTimeMillis()
                 LoggingUtils.logPromptDebug("MainActivity", "isRagEnabled: $isRagEnabled")
                 LoggingUtils.logPromptDebug("MainActivity", "finalPrompt == userPrompt: ${finalPrompt == userPrompt}")
                 LoggingUtils.logPromptDebug("MainActivity", "finalPrompt length: ${finalPrompt.length}, userPrompt length: ${userPrompt.length}")
@@ -294,16 +308,24 @@ class MainActivity : AppCompatActivity() {
                     LoggingUtils.logPromptDebug("MainActivity", "Question part: '$userPrompt'")
                     
                     val ragPrompt = llamaModel.buildRAGPrompt(contextPart, userPrompt, systemPrompt)
+                    val promptEndTime = System.currentTimeMillis()
+                    val promptTime = promptEndTime - promptStartTime
+                    
                     LoggingUtils.logPromptDebug("MainActivity", "Built RAG prompt with system: '$systemPrompt'")
                     LoggingUtils.logPromptDebug("MainActivity", "- Total length: ${ragPrompt.length} chars")
+                    LoggingUtils.logPromptDebug("MainActivity", "- Prompt building time: ${promptTime}ms")
                     LoggingUtils.logPromptDebug("MainActivity", "- Full RAG prompt:")
                     LoggingUtils.logLongText("MainActivity", "[PROMPT DEBUG] RAG", ragPrompt, Constants.Logging.RAG_CHUNK_SIZE)
                     ragPrompt
                 } else {
                     LoggingUtils.logPromptDebug("MainActivity", "Building simple QA prompt (no context)...")
                     val qaPrompt = llamaModel.buildQAPrompt(userPrompt, systemPrompt)
+                    val promptEndTime = System.currentTimeMillis()
+                    val promptTime = promptEndTime - promptStartTime
+                    
                     LoggingUtils.logPromptDebug("MainActivity", "Built QA prompt with system: '$systemPrompt'")
                     LoggingUtils.logPromptDebug("MainActivity", "- Total length: ${qaPrompt.length} chars")
+                    LoggingUtils.logPromptDebug("MainActivity", "- Prompt building time: ${promptTime}ms")
                     LoggingUtils.logPromptDebug("MainActivity", "- Full prompt: '${qaPrompt.replace("\n", "\\n")}'")
                     qaPrompt
                 }
@@ -338,8 +360,15 @@ class MainActivity : AppCompatActivity() {
                     
                     var tokenCount = 0
                     
+                    val generationStartTime = System.currentTimeMillis()
+                    LoggingUtils.logGenerationDebug("MainActivity", "=== INFERENCE PERFORMANCE ANALYSIS ===")
                     LoggingUtils.logGenerationDebug("MainActivity", "Starting generation with prompt of ${prompt.length} chars")
                     LoggingUtils.logGenerationDebug("MainActivity", "Max tokens: $maxGenerationTokens")
+                    LoggingUtils.logGenerationDebug("MainActivity", "🚀 Generation started at: $generationStartTime")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Model: ${config.modelName}")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Thinking mode: $isThinkingMode")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Context size: ${Constants.Model.CONTEXT_SIZE}")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Threads: ${Constants.Model.N_THREADS}")
                     
                     // Track if we're inside thinking tags
                     var insideThinkingTag = false
@@ -400,15 +429,18 @@ class MainActivity : AppCompatActivity() {
                             botResponseBuilder.append(token)
                         }
                         
-                        withContext(Dispatchers.Main) {
-                            val displayText = if (!isThinkingMode) {
-                                filteredBuilder.toString()  // Already has modeIndicator
-                            } else {
-                                botResponseBuilder.toString()  // Already has modeIndicator
+                        // Optimize UI updates - only update every 3 tokens for better performance
+                        if (tokenCount % 3 == 0 || tokenCount <= 5) {
+                            withContext(Dispatchers.Main) {
+                                val displayText = if (!isThinkingMode) {
+                                    filteredBuilder.toString()  // Already has modeIndicator
+                                } else {
+                                    botResponseBuilder.toString()  // Already has modeIndicator
+                                }
+                                messages[botIndex] = botMessage.copy(text = displayText)
+                                chatAdapter.notifyItemChanged(botIndex)
+                                chatRecyclerView.scrollToPosition(botIndex)
                             }
-                            messages[botIndex] = botMessage.copy(text = displayText)
-                            chatAdapter.notifyItemChanged(botIndex)
-                            chatRecyclerView.scrollToPosition(botIndex)
                         }
                     }
                     
@@ -418,6 +450,25 @@ class MainActivity : AppCompatActivity() {
                     }
                     
                     // Update final message with filtered content
+                    val generationEndTime = System.currentTimeMillis()
+                    val totalGenerationTime = generationEndTime - generationStartTime
+                    val tokensPerSecond = if (totalGenerationTime > 0) (tokenCount * 1000.0 / totalGenerationTime) else 0.0
+                    
+                    // === 모바일 성능 분석 ===
+                    val avgTimePerToken = if (tokenCount > 0) totalGenerationTime.toDouble() / tokenCount else 0.0
+                    val memoryUsage = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
+                    val memoryUsageMB = memoryUsage / (1024 * 1024)
+                    
+                    // PerformanceLogger를 사용한 인퍼런스 성능 분석
+                    PerformanceLogger.logInferencePerformance(
+                        totalTime = totalGenerationTime,
+                        tokenCount = tokenCount,
+                        modelName = config.modelName,
+                        thinkingMode = isThinkingMode,
+                        contextLength = prompt.length,
+                        memoryUsageMB = memoryUsageMB
+                    )
+                    
                     withContext(Dispatchers.Main) {
                         val finalText = if (!isThinkingMode) {
                             filteredBuilder.toString()
@@ -428,6 +479,26 @@ class MainActivity : AppCompatActivity() {
                         messages[botIndex] = botMessage.copy(text = finalText)
                         chatAdapter.notifyItemChanged(botIndex)
                     }
+                    
+                    // === 전체 성능 요약 ===
+                    val totalEndTime = System.currentTimeMillis()
+                    val totalTime = totalEndTime - totalStartTime
+                    val ragTime = if (isRagEnabled && ragInitialized) contextTime else 0L
+                    val inferenceTime = totalGenerationTime
+                    
+                    // PerformanceLogger를 사용한 전체 성능 요약
+                    PerformanceLogger.logTotalPerformance(
+                        totalTime = totalTime,
+                        ragTime = ragTime,
+                        inferenceTime = inferenceTime,
+                        tokenCount = tokenCount,
+                        tokensPerSecond = tokensPerSecond,
+                        memoryUsageMB = memoryUsageMB,
+                        modelName = config.modelName,
+                        ragEnabled = isRagEnabled
+                    )
+                    
+                    LoggingUtils.logSectionEnd("MainActivity", "TOTAL RAG + INFERENCE PERFORMANCE")
                     
                     LoggingUtils.logGenerationDebug("MainActivity", "Generation complete")
                     LoggingUtils.logGenerationDebug("MainActivity", "Total tokens generated: $tokenCount")
@@ -707,13 +778,13 @@ class MainActivity : AppCompatActivity() {
                     Log.e("MainActivity", "Model file NOT found in assets: $selectedModel", e)
                 }
                 
-                // Load the GGUF model
+                // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 4096,  // Increased to handle larger contexts
-                    nThreads = 4,
-                    temperature = 0.7f,
-                    minP = 0.05f
+                    contextSize = Constants.Model.CONTEXT_SIZE,
+                    nThreads = Constants.Model.N_THREADS,
+                    temperature = Constants.Model.TEMPERATURE,
+                    minP = Constants.Model.MIN_P
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully")
@@ -760,13 +831,13 @@ class MainActivity : AppCompatActivity() {
                     Log.e("MainActivity", "Model file NOT found in assets: $selectedModel", e)
                 }
                 
-                // Load the GGUF model
+                // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 4096,
-                    nThreads = 4,
-                    temperature = 0.7f,
-                    minP = 0.05f
+                    contextSize = Constants.Model.CONTEXT_SIZE,
+                    nThreads = Constants.Model.N_THREADS,
+                    temperature = Constants.Model.TEMPERATURE,
+                    minP = Constants.Model.MIN_P
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully: $selectedModel")
