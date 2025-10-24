@@ -231,8 +231,14 @@ class MainActivity : AppCompatActivity() {
                     delay(500) // Give system time to free memory
                 }
                 
+                // === 전체 RAG + 인퍼런스 성능 측정 시작 ===
+                val totalStartTime = System.currentTimeMillis()
+                LoggingUtils.logSectionStart("MainActivity", "TOTAL RAG + INFERENCE PERFORMANCE")
+                LoggingUtils.logContextDebug("MainActivity", "=== MOBILE RAG + LLM PERFORMANCE ANALYSIS ===")
+                
                 // Get RAG context if enabled
                 var finalPrompt = userPrompt
+                var contextTime = 0L  // RAG 검색 시간을 저장할 변수
                 if (isRagEnabled && ragInitialized) {
                     LoggingUtils.logSectionStart("MainActivity", "RAG CONTEXT RETRIEVAL")
                     LoggingUtils.logContextDebug("MainActivity", "RAG enabled: $isRagEnabled, RAG initialized: $ragInitialized")
@@ -245,15 +251,17 @@ class MainActivity : AppCompatActivity() {
                     
                     try {
                         val contextStartTime = System.currentTimeMillis()
+                        LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH PERFORMANCE ===")
                         LoggingUtils.logContextDebug("MainActivity", "Calling mobileRAG.getContext()...")
                         val context = mobileRAG.getContext(userPrompt)
                         val contextEndTime = System.currentTimeMillis()
-                        val contextTime = contextEndTime - contextStartTime
+                        contextTime = contextEndTime - contextStartTime
                         
-                        LoggingUtils.logContextDebug("MainActivity", "Raw context received:")
+                        LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH RESULTS ===")
                         LoggingUtils.logContextDebug("MainActivity", "- Length: ${context.length} chars")
                         LoggingUtils.logContextDebug("MainActivity", "- Context retrieval time: ${contextTime}ms")
                         LoggingUtils.logContextDebug("MainActivity", "- Empty: ${context.isEmpty()}")
+                        LoggingUtils.logContextDebug("MainActivity", "- Search speed: ${context.length * 1000.0 / contextTime} chars/sec")
                         LoggingUtils.logContextDebug("MainActivity", "- Full context content:")
                         LoggingUtils.logLongText("MainActivity", "[CONTEXT DEBUG]", context, Constants.Logging.CHUNK_SIZE)
                         
@@ -353,9 +361,14 @@ class MainActivity : AppCompatActivity() {
                     var tokenCount = 0
                     
                     val generationStartTime = System.currentTimeMillis()
+                    LoggingUtils.logGenerationDebug("MainActivity", "=== INFERENCE PERFORMANCE ANALYSIS ===")
                     LoggingUtils.logGenerationDebug("MainActivity", "Starting generation with prompt of ${prompt.length} chars")
                     LoggingUtils.logGenerationDebug("MainActivity", "Max tokens: $maxGenerationTokens")
                     LoggingUtils.logGenerationDebug("MainActivity", "🚀 Generation started at: $generationStartTime")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Model: ${config.modelName}")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Thinking mode: $isThinkingMode")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Context size: ${Constants.Model.CONTEXT_SIZE}")
+                    LoggingUtils.logGenerationDebug("MainActivity", "Threads: ${Constants.Model.N_THREADS}")
                     
                     // Track if we're inside thinking tags
                     var insideThinkingTag = false
@@ -441,10 +454,20 @@ class MainActivity : AppCompatActivity() {
                     val totalGenerationTime = generationEndTime - generationStartTime
                     val tokensPerSecond = if (totalGenerationTime > 0) (tokenCount * 1000.0 / totalGenerationTime) else 0.0
                     
-                    LoggingUtils.logGenerationDebug("MainActivity", "🏁 Generation completed:")
-                    LoggingUtils.logGenerationDebug("MainActivity", "- Total time: ${totalGenerationTime}ms")
-                    LoggingUtils.logGenerationDebug("MainActivity", "- Tokens generated: $tokenCount")
-                    LoggingUtils.logGenerationDebug("MainActivity", "- Speed: ${String.format("%.2f", tokensPerSecond)} tokens/sec")
+                    // === 모바일 성능 분석 ===
+                    val avgTimePerToken = if (tokenCount > 0) totalGenerationTime.toDouble() / tokenCount else 0.0
+                    val memoryUsage = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
+                    val memoryUsageMB = memoryUsage / (1024 * 1024)
+                    
+                    // PerformanceLogger를 사용한 인퍼런스 성능 분석
+                    PerformanceLogger.logInferencePerformance(
+                        totalTime = totalGenerationTime,
+                        tokenCount = tokenCount,
+                        modelName = config.modelName,
+                        thinkingMode = isThinkingMode,
+                        contextLength = prompt.length,
+                        memoryUsageMB = memoryUsageMB
+                    )
                     
                     withContext(Dispatchers.Main) {
                         val finalText = if (!isThinkingMode) {
@@ -456,6 +479,26 @@ class MainActivity : AppCompatActivity() {
                         messages[botIndex] = botMessage.copy(text = finalText)
                         chatAdapter.notifyItemChanged(botIndex)
                     }
+                    
+                    // === 전체 성능 요약 ===
+                    val totalEndTime = System.currentTimeMillis()
+                    val totalTime = totalEndTime - totalStartTime
+                    val ragTime = if (isRagEnabled && ragInitialized) contextTime else 0L
+                    val inferenceTime = totalGenerationTime
+                    
+                    // PerformanceLogger를 사용한 전체 성능 요약
+                    PerformanceLogger.logTotalPerformance(
+                        totalTime = totalTime,
+                        ragTime = ragTime,
+                        inferenceTime = inferenceTime,
+                        tokenCount = tokenCount,
+                        tokensPerSecond = tokensPerSecond,
+                        memoryUsageMB = memoryUsageMB,
+                        modelName = config.modelName,
+                        ragEnabled = isRagEnabled
+                    )
+                    
+                    LoggingUtils.logSectionEnd("MainActivity", "TOTAL RAG + INFERENCE PERFORMANCE")
                     
                     LoggingUtils.logGenerationDebug("MainActivity", "Generation complete")
                     LoggingUtils.logGenerationDebug("MainActivity", "Total tokens generated: $tokenCount")
@@ -738,10 +781,10 @@ class MainActivity : AppCompatActivity() {
                 // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 2048,  // Reduced for faster inference
-                    nThreads = 6,        // Increased for better parallelization
-                    temperature = 0.5f,  // Lower temperature for more focused responses
-                    minP = 0.1f         // Slightly higher for better quality
+                    contextSize = Constants.Model.CONTEXT_SIZE,
+                    nThreads = Constants.Model.N_THREADS,
+                    temperature = Constants.Model.TEMPERATURE,
+                    minP = Constants.Model.MIN_P
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully")
@@ -791,10 +834,10 @@ class MainActivity : AppCompatActivity() {
                 // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 2048,  // Reduced for faster inference
-                    nThreads = 6,        // Increased for better parallelization
-                    temperature = 0.5f,  // Lower temperature for more focused responses
-                    minP = 0.1f         // Slightly higher for better quality
+                    contextSize = Constants.Model.CONTEXT_SIZE,
+                    nThreads = Constants.Model.N_THREADS,
+                    temperature = Constants.Model.TEMPERATURE,
+                    minP = Constants.Model.MIN_P
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully: $selectedModel")
