@@ -5,16 +5,16 @@ package com.example.local_llm
  */
 object Constants {
     
-    // Model Configuration
+    // Model Configuration - Optimized for speed
     object Model {
         const val DEFAULT_MODEL = "Qwen3-0.6B-Q8_0.gguf"
-        const val CONTEXT_SIZE = 4096
-        const val N_THREADS = 4
-        const val TEMPERATURE = 0.7f
-        const val MIN_P = 0.05f
+        const val CONTEXT_SIZE = 2048  // Reduced for faster inference
+        const val N_THREADS = 6        // Increased for better parallelization
+        const val TEMPERATURE = 0.5f   // Lower for more focused responses
+        const val MIN_P = 0.1f        // Slightly higher for better quality
     }
     
-    // RAG Configuration
+    // RAG Configuration - Optimized for speed
     object RAG {
         const val CHUNK_SIZE = 128
         const val CHUNK_OVERLAP = 16

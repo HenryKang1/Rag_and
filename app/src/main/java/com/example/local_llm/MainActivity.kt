@@ -244,10 +244,15 @@ class MainActivity : AppCompatActivity() {
                     }
                     
                     try {
+                        val contextStartTime = System.currentTimeMillis()
                         LoggingUtils.logContextDebug("MainActivity", "Calling mobileRAG.getContext()...")
                         val context = mobileRAG.getContext(userPrompt)
+                        val contextEndTime = System.currentTimeMillis()
+                        val contextTime = contextEndTime - contextStartTime
+                        
                         LoggingUtils.logContextDebug("MainActivity", "Raw context received:")
                         LoggingUtils.logContextDebug("MainActivity", "- Length: ${context.length} chars")
+                        LoggingUtils.logContextDebug("MainActivity", "- Context retrieval time: ${contextTime}ms")
                         LoggingUtils.logContextDebug("MainActivity", "- Empty: ${context.isEmpty()}")
                         LoggingUtils.logContextDebug("MainActivity", "- Full context content:")
                         LoggingUtils.logLongText("MainActivity", "[CONTEXT DEBUG]", context, Constants.Logging.CHUNK_SIZE)
@@ -283,6 +288,7 @@ class MainActivity : AppCompatActivity() {
                 
                 // Build prompt for llama.cpp
                 LoggingUtils.logSectionStart("MainActivity", "PROMPT BUILDING")
+                val promptStartTime = System.currentTimeMillis()
                 LoggingUtils.logPromptDebug("MainActivity", "isRagEnabled: $isRagEnabled")
                 LoggingUtils.logPromptDebug("MainActivity", "finalPrompt == userPrompt: ${finalPrompt == userPrompt}")
                 LoggingUtils.logPromptDebug("MainActivity", "finalPrompt length: ${finalPrompt.length}, userPrompt length: ${userPrompt.length}")
@@ -294,16 +300,24 @@ class MainActivity : AppCompatActivity() {
                     LoggingUtils.logPromptDebug("MainActivity", "Question part: '$userPrompt'")
                     
                     val ragPrompt = llamaModel.buildRAGPrompt(contextPart, userPrompt, systemPrompt)
+                    val promptEndTime = System.currentTimeMillis()
+                    val promptTime = promptEndTime - promptStartTime
+                    
                     LoggingUtils.logPromptDebug("MainActivity", "Built RAG prompt with system: '$systemPrompt'")
                     LoggingUtils.logPromptDebug("MainActivity", "- Total length: ${ragPrompt.length} chars")
+                    LoggingUtils.logPromptDebug("MainActivity", "- Prompt building time: ${promptTime}ms")
                     LoggingUtils.logPromptDebug("MainActivity", "- Full RAG prompt:")
                     LoggingUtils.logLongText("MainActivity", "[PROMPT DEBUG] RAG", ragPrompt, Constants.Logging.RAG_CHUNK_SIZE)
                     ragPrompt
                 } else {
                     LoggingUtils.logPromptDebug("MainActivity", "Building simple QA prompt (no context)...")
                     val qaPrompt = llamaModel.buildQAPrompt(userPrompt, systemPrompt)
+                    val promptEndTime = System.currentTimeMillis()
+                    val promptTime = promptEndTime - promptStartTime
+                    
                     LoggingUtils.logPromptDebug("MainActivity", "Built QA prompt with system: '$systemPrompt'")
                     LoggingUtils.logPromptDebug("MainActivity", "- Total length: ${qaPrompt.length} chars")
+                    LoggingUtils.logPromptDebug("MainActivity", "- Prompt building time: ${promptTime}ms")
                     LoggingUtils.logPromptDebug("MainActivity", "- Full prompt: '${qaPrompt.replace("\n", "\\n")}'")
                     qaPrompt
                 }
@@ -338,8 +352,10 @@ class MainActivity : AppCompatActivity() {
                     
                     var tokenCount = 0
                     
+                    val generationStartTime = System.currentTimeMillis()
                     LoggingUtils.logGenerationDebug("MainActivity", "Starting generation with prompt of ${prompt.length} chars")
                     LoggingUtils.logGenerationDebug("MainActivity", "Max tokens: $maxGenerationTokens")
+                    LoggingUtils.logGenerationDebug("MainActivity", "🚀 Generation started at: $generationStartTime")
                     
                     // Track if we're inside thinking tags
                     var insideThinkingTag = false
@@ -400,15 +416,18 @@ class MainActivity : AppCompatActivity() {
                             botResponseBuilder.append(token)
                         }
                         
-                        withContext(Dispatchers.Main) {
-                            val displayText = if (!isThinkingMode) {
-                                filteredBuilder.toString()  // Already has modeIndicator
-                            } else {
-                                botResponseBuilder.toString()  // Already has modeIndicator
+                        // Optimize UI updates - only update every 3 tokens for better performance
+                        if (tokenCount % 3 == 0 || tokenCount <= 5) {
+                            withContext(Dispatchers.Main) {
+                                val displayText = if (!isThinkingMode) {
+                                    filteredBuilder.toString()  // Already has modeIndicator
+                                } else {
+                                    botResponseBuilder.toString()  // Already has modeIndicator
+                                }
+                                messages[botIndex] = botMessage.copy(text = displayText)
+                                chatAdapter.notifyItemChanged(botIndex)
+                                chatRecyclerView.scrollToPosition(botIndex)
                             }
-                            messages[botIndex] = botMessage.copy(text = displayText)
-                            chatAdapter.notifyItemChanged(botIndex)
-                            chatRecyclerView.scrollToPosition(botIndex)
                         }
                     }
                     
@@ -418,6 +437,15 @@ class MainActivity : AppCompatActivity() {
                     }
                     
                     // Update final message with filtered content
+                    val generationEndTime = System.currentTimeMillis()
+                    val totalGenerationTime = generationEndTime - generationStartTime
+                    val tokensPerSecond = if (totalGenerationTime > 0) (tokenCount * 1000.0 / totalGenerationTime) else 0.0
+                    
+                    LoggingUtils.logGenerationDebug("MainActivity", "🏁 Generation completed:")
+                    LoggingUtils.logGenerationDebug("MainActivity", "- Total time: ${totalGenerationTime}ms")
+                    LoggingUtils.logGenerationDebug("MainActivity", "- Tokens generated: $tokenCount")
+                    LoggingUtils.logGenerationDebug("MainActivity", "- Speed: ${String.format("%.2f", tokensPerSecond)} tokens/sec")
+                    
                     withContext(Dispatchers.Main) {
                         val finalText = if (!isThinkingMode) {
                             filteredBuilder.toString()
@@ -707,13 +735,13 @@ class MainActivity : AppCompatActivity() {
                     Log.e("MainActivity", "Model file NOT found in assets: $selectedModel", e)
                 }
                 
-                // Load the GGUF model
+                // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 4096,  // Increased to handle larger contexts
-                    nThreads = 4,
-                    temperature = 0.7f,
-                    minP = 0.05f
+                    contextSize = 2048,  // Reduced for faster inference
+                    nThreads = 6,        // Increased for better parallelization
+                    temperature = 0.5f,  // Lower temperature for more focused responses
+                    minP = 0.1f         // Slightly higher for better quality
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully")
@@ -760,13 +788,13 @@ class MainActivity : AppCompatActivity() {
                     Log.e("MainActivity", "Model file NOT found in assets: $selectedModel", e)
                 }
                 
-                // Load the GGUF model
+                // Load the GGUF model with optimized parameters for speed
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
-                    contextSize = 4096,
-                    nThreads = 4,
-                    temperature = 0.7f,
-                    minP = 0.05f
+                    contextSize = 2048,  // Reduced for faster inference
+                    nThreads = 6,        // Increased for better parallelization
+                    temperature = 0.5f,  // Lower temperature for more focused responses
+                    minP = 0.1f         // Slightly higher for better quality
                 )
                 
                 Log.d("MainActivity", "Model loaded successfully: $selectedModel")
