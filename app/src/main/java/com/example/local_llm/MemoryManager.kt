@@ -53,10 +53,10 @@ object MemoryManager {
         val heapUsagePercent = (memInfo.usedHeapMB.toFloat() / memInfo.maxHeapMB.toFloat()) * 100
         
         val baseTokens = when {
-            heapUsagePercent < Constants.Memory.LOW_MEMORY_THRESHOLD -> 512
-            heapUsagePercent < Constants.Memory.MODERATE_MEMORY_THRESHOLD -> 384
-            heapUsagePercent < Constants.Memory.HIGH_MEMORY_THRESHOLD -> 256
-            else -> 128
+            heapUsagePercent < Constants.Memory.LOW_MEMORY_THRESHOLD -> 1024
+            heapUsagePercent < Constants.Memory.MODERATE_MEMORY_THRESHOLD -> 768
+            heapUsagePercent < Constants.Memory.HIGH_MEMORY_THRESHOLD -> 512
+            else -> 256
         }
         
         val maxTokens = if (!isThinkingMode) {
