@@ -81,6 +81,8 @@ LLMInference::loadModel(const char* model_path, float minP, float temperature, b
     ctx_params.n_ctx                = contextSize;
     ctx_params.n_threads            = nThreads;
     ctx_params.no_perf              = true; // disable performance metrics
+    // n_batch 설정: 프리필 성능 최적화를 위해 적절한 크기 설정
+    ctx_params.n_batch              = std::min<int>(1024, (int)contextSize);
     _ctx                            = llama_init_from_model(_model, ctx_params);
 
     if (!_ctx) {
@@ -164,6 +166,13 @@ LLMInference::startCompletion(const char* query) {
     }
     _responseGenerationTime = 0;
     _responseNumTokens      = 0;
+    // reset detailed perf metrics
+    _prefillTimeUs = 0;
+    _decodeTimeUs = 0;
+    _tPrefillStartUs = 0;
+    _firstTokenLatencyUs = 0;
+    _firstTokenLogged = false;
+    _currPos = 0;  // 위치 초기화
     addChatMessage(query, "user");
     // apply the chat-template
     int newLen = llama_chat_apply_template(_chatTemplate, _messages.data(), _messages.size(), true,
@@ -181,12 +190,85 @@ LLMInference::startCompletion(const char* query) {
     std::string prompt(_formattedMessages.begin() + _prevLen, _formattedMessages.begin() + newLen);
     _promptTokens = common_tokenize(llama_model_get_vocab(_model), prompt, true, true);
 
-    // create a llama_batch containing a single sequence
-    // Use SmolChat-Android's simple approach
-    _batch.token    = _promptTokens.data();
-    _batch.n_tokens = _promptTokens.size();
+    // 프리필을 n_batch 크기로 청크 나눠 처리 (성능 최적화)
+    const int32_t n_batch = llama_n_batch(_ctx);
+    const int n_prompt_tokens = static_cast<int>(_promptTokens.size());
     
-    LOGi("[DEBUG] Batch prepared with %d prompt tokens", _batch.n_tokens);
+    _tPrefillStartUs = ggml_time_us();
+    _prefillTimeUs = 0;
+    LOGi("[PERF] PREFILL start: prompt_tokens=%d, n_batch=%d", n_prompt_tokens, n_batch);
+    
+    // 프리필이 n_batch보다 작거나 같으면 한 번에 처리
+    if (n_prompt_tokens <= n_batch) {
+        _batch = llama_batch_get_one(_promptTokens.data(), n_prompt_tokens);
+        auto chunk_start = ggml_time_us();
+        int decode_result = llama_decode(_ctx, _batch);
+        auto chunk_end = ggml_time_us();
+        
+        if (decode_result < 0) {
+            LOGe("[PERF] PREFILL failed, result=%d", decode_result);
+            llama_batch_free(_batch);
+            throw std::runtime_error("llama_decode() failed during prefill");
+        }
+        
+        _prefillTimeUs = chunk_end - chunk_start;
+        llama_batch_free(_batch);
+    } else {
+        // 큰 프리필을 청크로 나눠 처리 (llama_batch_init으로 재사용 가능한 배치 생성)
+        llama_batch batch = llama_batch_init(n_batch, 0, 1);
+        int consumed = 0;
+        
+        while (consumed < n_prompt_tokens) {
+            batch.n_tokens = 0;  // 배치 클리어
+            
+            const int take = std::min(n_batch, n_prompt_tokens - consumed);
+            for (int i = 0; i < take; ++i) {
+                const int idx = consumed + i;
+                const llama_token tok = _promptTokens[idx];
+                const bool need_logits = (idx == n_prompt_tokens - 1); // 마지막 프리필 토큰만 logits
+                
+                // 배치에 토큰 추가 (명시적 위치와 logits 설정)
+                batch.token[batch.n_tokens] = tok;
+                batch.pos[batch.n_tokens] = (llama_pos)idx;
+                batch.n_seq_id[batch.n_tokens] = 1;
+                batch.seq_id[batch.n_tokens][0] = 0;
+                batch.logits[batch.n_tokens] = need_logits;
+                batch.n_tokens++;
+            }
+            
+            auto chunk_start = ggml_time_us();
+            int decode_result = llama_decode(_ctx, batch);
+            auto chunk_end = ggml_time_us();
+            
+            if (decode_result < 0) {
+                LOGe("[PERF] PREFILL failed at chunk consumed=%d, result=%d", consumed, decode_result);
+                llama_batch_free(batch);
+                throw std::runtime_error("llama_decode() failed during prefill");
+            }
+            
+            _prefillTimeUs += (chunk_end - chunk_start);
+            if (consumed == 0) {
+                LOGi("[PERF] PREFILL first chunk: %d tokens in %.2f ms", 
+                     take, (chunk_end - chunk_start) / 1000.0f);
+            }
+            
+            consumed += take;
+        }
+        
+        llama_batch_free(batch);
+    }
+    
+    // 프리필 완료 후 디코드 위치 초기화
+    _currPos = (llama_pos)n_prompt_tokens;
+    
+    auto prefill_end = ggml_time_us();
+    const double prefill_ms = _prefillTimeUs / 1000.0;
+    const double prefill_wall_ms = (prefill_end - _tPrefillStartUs) / 1000.0;
+    LOGi("[PERF] PREFILL done: %d tokens | wall %.2f ms | kernel %.2f ms | %.2f tok/s", 
+         n_prompt_tokens,
+         prefill_wall_ms,
+         prefill_ms,
+         n_prompt_tokens > 0 ? (1000.0 * (double)n_prompt_tokens / prefill_wall_ms) : 0.0);
 }
 
 // taken from:
@@ -241,26 +323,46 @@ LLMInference::completionLoop() {
         LOGi("  Context used: %d / %d (%.1f%%)", 
              _nCtxUsed, contextSize, 
              (_nCtxUsed * 100.0f / contextSize));
-        LOGi("  Batch tokens: %d", _batch.n_tokens);
     }
     
-    if (_nCtxUsed + _batch.n_tokens > contextSize) {
-        LOGe("Context size reached! Used: %d, Batch: %d, Total: %d > %d",
-             _nCtxUsed, _batch.n_tokens, 
-             _nCtxUsed + _batch.n_tokens, contextSize);
+    // Context 체크 (다음 토큰 포함)
+    if (_nCtxUsed + 1 > contextSize) {
+        LOGe("Context size reached! Used: %d, would exceed: %d",
+             _nCtxUsed, contextSize);
         throw std::runtime_error("context size reached");
     }
 
     auto start = ggml_time_us();
-    // run the model
-    LOGi("[DEBUG] Calling llama_decode with batch.n_tokens=%d", _batch.n_tokens);
-    int decode_result = llama_decode(_ctx, _batch);
-    if (decode_result < 0) {
-        LOGe("[DEBUG] llama_decode failed with result=%d", decode_result);
-        LOGe("[DEBUG] Current state: _responseNumTokens=%ld, batch.pos[0]=%d", _responseNumTokens, _batch.pos[0]);
-        throw std::runtime_error("llama_decode() failed");
+    
+    // 첫 토큰: 프리필에서 이미 logits 계산됨, decode 불필요, 바로 샘플링
+    // 이후 토큰들: 이전에 샘플된 토큰을 decode하고 새로 샘플링
+    if (_responseNumTokens > 0) {
+        // 이전 루프에서 샘플된 토큰을 디코드 (명시적 위치 사용)
+        llama_batch dec_batch = llama_batch_init(1, 0, 1);
+        dec_batch.token[0] = _currToken;
+        dec_batch.pos[0] = _currPos++;
+        dec_batch.n_seq_id[0] = 1;
+        dec_batch.seq_id[0][0] = 0;
+        dec_batch.logits[0] = true;
+        dec_batch.n_tokens = 1;
+        
+        LOGi("[DEBUG] Calling llama_decode with batch.n_tokens=%d (decode step, pos=%d)", 
+             dec_batch.n_tokens, (int)dec_batch.pos[0]);
+        
+        int decode_result = llama_decode(_ctx, dec_batch);
+        llama_batch_free(dec_batch);
+        
+        if (decode_result < 0) {
+            LOGe("[DEBUG] llama_decode failed with result=%d", decode_result);
+            LOGe("[DEBUG] Current state: _responseNumTokens=%ld, _currPos=%d", 
+                 _responseNumTokens, (int)_currPos);
+            throw std::runtime_error("llama_decode() failed");
+        }
+        _decodeTimeUs += (ggml_time_us() - start);
+    } else {
+        // 첫 토큰: 프리필에서 이미 logits 계산됨, decode 스킵
+        LOGi("[DEBUG] First token: using logits from prefill, skipping decode");
     }
-    LOGi("[DEBUG] llama_decode succeeded");
 
     // sample a token and check if it is an EOG (end of generation token)
     // convert the integer token to its corresponding word-piece
@@ -300,19 +402,34 @@ LLMInference::completionLoop() {
     LOGi("common_token_to_piece: %s", piece.c_str());
     auto end = ggml_time_us();
     _responseGenerationTime += (end - start);
+    if (_responseNumTokens == 0 && !_firstTokenLogged) {
+        // first token latency = time from prefill start to first token materialized
+        _firstTokenLatencyUs = end - _tPrefillStartUs;
+        _firstTokenLogged = true;
+        // report initial perf snapshot
+        LOGi("[PERF] FIRST TOKEN latency: %lld us (%.2f ms)",
+             (long long)_firstTokenLatencyUs, _firstTokenLatencyUs / 1000.0f);
+    }
     _responseNumTokens += 1;
     _cacheResponseTokens += piece;
 
-    // re-init the batch with the newly predicted token
-    // key, value pairs of all previous tokens have been cached in the KV cache
-    // Use SmolChat-Android's simple approach
-    _batch.token    = &_currToken;
-    _batch.n_tokens = 1;
+    // 다음 스텝은 completionLoop에서 명시적 배치로 처리됨
 
     if (_isValidUtf8(_cacheResponseTokens.c_str())) {
         _response += _cacheResponseTokens;
         std::string valid_utf8_piece = _cacheResponseTokens;
         _cacheResponseTokens.clear();
+        // periodic decode perf (exclude prefill)
+        if (_responseNumTokens % 10 == 0) {
+            // tokens after first token
+            long decoded_tokens = (_responseNumTokens > 0) ? (_responseNumTokens - 1) : 0;
+            double decode_ms = _decodeTimeUs / 1000.0;
+            double tps = (decode_ms > 0.0 && decoded_tokens > 0)
+                         ? (decoded_tokens * 1000.0 / decode_ms)
+                         : 0.0;
+            LOGi("[PERF] DECODE progress: tokens=%ld, decode_time=%.2f ms, speed=%.2f tok/s",
+                 decoded_tokens, decode_ms, tps);
+        }
         return valid_utf8_piece;
     }
 
@@ -329,8 +446,8 @@ LLMInference::stopCompletion() {
     _responseNumTokens = 0;
     _responseGenerationTime = 0;
     
-    // Clear the batch and context usage for next generation
-    _batch.n_tokens = 0;
+    // Clear context usage for next generation
+    // Note: _batch is managed in completionLoop, no need to clear here
     _nCtxUsed = 0;
     
     // Clear KV cache for clean start
@@ -380,10 +497,8 @@ void LLMInference::clearContext() {
     _responseNumTokens = 0;
     _responseGenerationTime = 0;
     
-    // Clear batch
-    if (_batch.token) {
-        _batch.n_tokens = 0;
-    }
+    // Clear batch (will be recreated in startCompletion)
+    // Note: _batch is freed after prefill, no need to clear here
     
     // Reset sampler
     if (_sampler) {
@@ -404,8 +519,8 @@ LLMInference::~LLMInference() {
     if (_chatTemplate) {
         free(const_cast<char*>(_chatTemplate));
     }
-    // Free the batch structure
-    llama_batch_free(_batch);
+    // Note: _batch is always freed immediately after use in startCompletion,
+    // so there's no need to free it here. Freeing an uninitialized batch would cause a crash.
     if (_sampler) {
         llama_sampler_free(_sampler);
     }

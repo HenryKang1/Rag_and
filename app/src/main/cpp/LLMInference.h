@@ -12,6 +12,7 @@ class LLMInference {
     llama_sampler* _sampler;
     llama_token    _currToken;
     llama_batch    _batch;
+    llama_pos      _currPos = 0;  // 현재 디코드 위치 (명시적 관리)
 
     // container to store user/assistant messages in the chat
     std::vector<llama_chat_message> _messages;
@@ -36,6 +37,13 @@ class LLMInference {
 
     // length of context window consumed during the conversation
     int _nCtxUsed = 0;
+
+    // detailed perf metrics (prefill/decoding)
+    int64_t _prefillTimeUs = 0;
+    int64_t _decodeTimeUs  = 0;   // excludes prefill
+    int64_t _tPrefillStartUs = 0; // internal timestamp
+    int64_t _firstTokenLatencyUs = 0;
+    bool    _firstTokenLogged = false;
 
     bool _isValidUtf8(const char* response);
 

@@ -21,6 +21,7 @@ object Constants {
         const val TOP_K = 5
         const val EMBEDDING_DIM = 384
         const val MAX_CONTEXT_CHARS = 3000
+        const val MAX_CONTEXT_TOKENS = 300  // 토큰 단위 제한 (프리필 속도 개선)
         const val MIN_CHUNK_SIZE = 50
         const val MAX_CHUNK_SIZE = 300
         const val SEMANTIC_OVERLAP = 30
