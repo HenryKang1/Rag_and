@@ -442,7 +442,7 @@ class MainActivity : AppCompatActivity() {
                             botResponseBuilder.append(token)
                         }
                         
-                        // Optimize UI updates - only update every 3 tokens for better performance
+                        // Optimize UI updates - only update every 5 tokens for better performance
                         if (tokenCount % 3 == 0 || tokenCount <= 5) {
                             withContext(Dispatchers.Main) {
                                 val displayText = if (!isThinkingMode) {

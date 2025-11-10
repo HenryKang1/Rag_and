@@ -74,3 +74,5 @@ lint/tmp/
 *.gguf
 # Asset files that might be too large
 app/src/main/assets/*
+
+*.csv

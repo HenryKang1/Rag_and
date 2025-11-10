@@ -8,23 +8,24 @@ object Constants {
     // Model Configuration - Optimized for speed
     object Model {
         const val DEFAULT_MODEL = "Qwen3-0.6B-Q8_0.gguf"
-        const val CONTEXT_SIZE = 2048  // Reduced for faster inference
-        const val N_THREADS = 6        // Increased for better parallelization
-        const val TEMPERATURE = 0.5f   // Lower for more focused responses
-        const val MIN_P = 0.1f        // Slightly higher for better quality
+        const val CONTEXT_SIZE = 2048  // Restored for proper functioning
+        const val N_THREADS = 8      // Increased for better parallelization
+        const val TEMPERATURE = 0.4f   // Balanced for speed and quality
+        const val MIN_P = 0.05f       // Balanced for speed and quality
     }
     
     // RAG Configuration - Optimized for speed
     object RAG {
         const val CHUNK_SIZE = 128
         const val CHUNK_OVERLAP = 16
-        const val TOP_K = 5
+        const val TOP_K = 4  // Balanced for quality and speed
         const val EMBEDDING_DIM = 384
         const val MAX_CONTEXT_CHARS = 3000
         const val MAX_CONTEXT_TOKENS = 300  // 토큰 단위 제한 (프리필 속도 개선)
         const val MIN_CHUNK_SIZE = 50
-        const val MAX_CHUNK_SIZE = 300
+        const val MAX_CHUNK_SIZE = 250  // Balanced chunk size
         const val SEMANTIC_OVERLAP = 30
+        const val OPTIMAL_MOBILE_CONTEXT = 1800  // Sweet spot for mobile (good speed)
     }
     
     // File Configuration
@@ -36,9 +37,9 @@ object Constants {
     
     // UI Configuration
     object UI {
-        const val SCROLL_DELAY_MS = 300
-        const val MEMORY_CHECK_DELAY_MS = 500
-        const val CLEANUP_DELAY_MS = 100
+        const val SCROLL_DELAY_MS = 200
+        const val MEMORY_CHECK_DELAY_MS = 300
+        const val CLEANUP_DELAY_MS = 50
     }
     
     // Token Configuration
@@ -50,14 +51,16 @@ object Constants {
         const val MAX_TOKENS_384 = 384
         const val MAX_TOKENS_512 = 512
         const val MAX_TOKENS_768 = 768
+        const val MAX_TOKENS_1024 = 1024
+        const val MAX_TOKENS_1536 = 1536
     }
     
     // Memory Configuration
     object Memory {
-        const val LOW_MEMORY_THRESHOLD = 50
-        const val MODERATE_MEMORY_THRESHOLD = 70
-        const val HIGH_MEMORY_THRESHOLD = 80
-        const val MEMORY_BOOST_FACTOR = 1.5f
+        const val LOW_MEMORY_THRESHOLD = 70
+        const val MODERATE_MEMORY_THRESHOLD = 80
+        const val HIGH_MEMORY_THRESHOLD = 90
+        const val MEMORY_BOOST_FACTOR = 2.5f
     }
     
     // Logging Configuration
