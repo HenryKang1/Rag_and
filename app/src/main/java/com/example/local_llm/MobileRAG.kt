@@ -359,11 +359,21 @@ class MobileRAG(private val context: Context) {
     }
     
     /**
-     * Get augmented context for generation
+     * Get augmented context for generation with token-based limiting
+     * @param query User query
+     * @param k Number of top results to retrieve
+     * @param tokenCounter Optional token counter function (text -> token count)
+     * @param maxTokens Maximum tokens allowed (0 = use character limit only)
      */
-    suspend fun getContext(query: String, k: Int = Constants.RAG.TOP_K): String = withContext(Dispatchers.IO) {
+    suspend fun getContext(
+        query: String, 
+        k: Int = Constants.RAG.TOP_K,
+        tokenCounter: ((String) -> Int)? = null,
+        maxTokens: Int = Constants.RAG.MAX_CONTEXT_TOKENS
+    ): String = withContext(Dispatchers.IO) {
         LoggingUtils.logSectionStart(TAG, "GET CONTEXT")
         LoggingUtils.logRAGDebug(TAG, "Getting context for: '$query'")
+        LoggingUtils.logRAGDebug(TAG, "Max tokens limit: $maxTokens (${if (tokenCounter != null) "enabled" else "disabled"})")
         
         val results = search(query, k)
         if (results.isEmpty()) {
@@ -373,25 +383,50 @@ class MobileRAG(private val context: Context) {
         
         LoggingUtils.logRAGDebug(TAG, "Building context from ${results.size} chunks")
         
-        // Build context with size limit to prevent OOM
+        // Build context with size limit (characters and optionally tokens)
         val contextBuilder = StringBuilder()
+        var currentTokenCount = 0
+        val useTokenLimit = tokenCounter != null && maxTokens > 0
         
         for ((index, result) in results.withIndex()) {
             val chunk = result.chunk.trim()
             val separator = if (contextBuilder.isNotEmpty()) "\n\n" else ""
-            
-            // Check if adding this chunk would exceed the limit
             val potentialAddition = separator + chunk
+            
+            // Check character limit
             if (contextBuilder.length + potentialAddition.length > Constants.RAG.MAX_CONTEXT_CHARS) {
-                // Try to add partial chunk if there's room
                 val remainingSpace = Constants.RAG.MAX_CONTEXT_CHARS - contextBuilder.length - separator.length
-                if (remainingSpace > 100) { // Only add if meaningful space left
+                if (remainingSpace > 100) {
                     contextBuilder.append(separator)
-                    contextBuilder.append(chunk.take(remainingSpace - 3)) // Reserve space for "..."
+                    val truncated = chunk.take(remainingSpace - 3)
+                    contextBuilder.append(truncated)
                     contextBuilder.append("...")
+                    LoggingUtils.logRAGDebug(TAG, "Context truncated at chunk ${index + 1} (char limit)")
                 }
-                LoggingUtils.logRAGDebug(TAG, "Context truncated at chunk ${index + 1}")
                 break
+            }
+            
+            // Check token limit if token counter is available
+            if (useTokenLimit) {
+                val chunkTokens = tokenCounter!!(potentialAddition)
+                if (currentTokenCount + chunkTokens > maxTokens) {
+                    // Try to add partial chunk if there's room
+                    val remainingTokens = maxTokens - currentTokenCount
+                    if (remainingTokens > 10) { // Only add if meaningful tokens left (>10)
+                        // Estimate characters per token (rough: 4 chars/token)
+                        val estimatedChars = remainingTokens * 4
+                        val truncated = chunk.take(min(estimatedChars.toInt(), chunk.length))
+                        if (truncated.isNotEmpty() && truncated.length > 50) {
+                            contextBuilder.append(separator)
+                            contextBuilder.append(truncated)
+                            contextBuilder.append("...")
+                            currentTokenCount += tokenCounter(separator + truncated + "...")
+                            LoggingUtils.logRAGDebug(TAG, "Context truncated at chunk ${index + 1} (token limit: $currentTokenCount/$maxTokens)")
+                        }
+                    }
+                    break
+                }
+                currentTokenCount += chunkTokens
             }
             
             contextBuilder.append(separator)
@@ -401,11 +436,16 @@ class MobileRAG(private val context: Context) {
         val context = contextBuilder.toString()
         
         LoggingUtils.logRAGDebug(TAG, "Final context length: ${context.length} characters")
+        if (useTokenLimit) {
+            val finalTokens = tokenCounter!!(context)
+            LoggingUtils.logRAGDebug(TAG, "Final context tokens: $finalTokens (limit: $maxTokens)")
+        }
         LoggingUtils.logRAGDebug(TAG, "Full context being returned:")
         LoggingUtils.logLongText(TAG, "[RAG DEBUG] Context", context, Constants.Logging.CONTEXT_CHUNK_SIZE)
         LoggingUtils.logSectionEnd(TAG, "GET CONTEXT")
         
-        return@withContext if (context.isNotEmpty()) "Context:\n$context" else ""
+        // Return pure context without "Context:" prefix (buildRAGPrompt will add it)
+        return@withContext context
     }
     
     /**

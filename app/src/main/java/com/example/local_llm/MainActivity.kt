@@ -170,8 +170,8 @@ class MainActivity : AppCompatActivity() {
         messages.add(Message("⏳ Please wait, the model is loading.", isUser = false))
         chatAdapter.notifyItemInserted(messages.size - 1)
 
-        // Load default model
-        loadDefaultModel()
+        // Note: Model loading is handled in onCreate() to avoid duplicate calls
+        // loadDefaultModel() is called once in onCreate()
 
         sendButton.setOnClickListener {
             val userPrompt = inputEditText.text.toString().trim()
@@ -253,7 +253,20 @@ class MainActivity : AppCompatActivity() {
                         val contextStartTime = System.currentTimeMillis()
                         LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH PERFORMANCE ===")
                         LoggingUtils.logContextDebug("MainActivity", "Calling mobileRAG.getContext()...")
-                        val context = mobileRAG.getContext(userPrompt)
+                        
+                        // 토큰 카운터: 문자 수를 기반으로 대략적인 토큰 수 추정 (1 토큰 ≈ 4 문자)
+                        // 더 정확한 계산을 원하면 실제 토큰화를 사용할 수 있음
+                        val tokenCounter: (String) -> Int = { text ->
+                            // 간단한 추정: 대략 4 문자당 1 토큰 (실제로는 모델에 따라 다름)
+                            (text.length / 4.0).toInt().coerceAtLeast(1)
+                        }
+                        
+                        val context = mobileRAG.getContext(
+                            userPrompt,
+                            k = Constants.RAG.TOP_K,
+                            tokenCounter = tokenCounter,
+                            maxTokens = Constants.RAG.MAX_CONTEXT_TOKENS
+                        )
                         val contextEndTime = System.currentTimeMillis()
                         contextTime = contextEndTime - contextStartTime
                         

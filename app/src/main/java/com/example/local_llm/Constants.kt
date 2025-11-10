@@ -20,7 +20,8 @@ object Constants {
         const val CHUNK_OVERLAP = 16
         const val TOP_K = 4  // Balanced for quality and speed
         const val EMBEDDING_DIM = 384
-        const val MAX_CONTEXT_CHARS = 2000  // Reduced for mobile performance (was 3000)
+        const val MAX_CONTEXT_CHARS = 3000
+        const val MAX_CONTEXT_TOKENS = 300  // 토큰 단위 제한 (프리필 속도 개선)
         const val MIN_CHUNK_SIZE = 50
         const val MAX_CHUNK_SIZE = 250  // Balanced chunk size
         const val SEMANTIC_OVERLAP = 30

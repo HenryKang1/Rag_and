@@ -1,0 +1,129 @@
+PC
+Short question answer
+Metrics:
+  init_time: 1761600941.4264476
+  first_token_time: 1761600941.9355829
+  first_token_latency: 0.5091352462768555
+  end_time: 1761600957.176678
+  total_time: 15.750230312347412
+  total_tokens: 378
+tokens_per_second: 23.999649052983465
+
+long question
+Metrics:
+  init_time: 1761603097.5075061
+  first_token_time: 1761603098.045373
+  first_token_latency: 0.5378668308258057
+  end_time: 1761603112.186099
+  total_time: 14.678592920303345
+  total_tokens: 433
+  tokens_per_second: 29.498740264203178
+
+
+Android
+=== INFERENCE PERFORMANCE ANALYSIS ===
+🤖 Inference Metrics:
+    - Total time: 4463ms
+    - Tokens generated: 49
+    - Speed: 10.98 tokens/sec
+    - Avg time per token: 91.08ms
+📱 Mobile Performance:
+    - Model: Qwen3
+    - Thinking mode: false
+    - Context length: 316 chars
+    - Memory usage: 53MB
+    - Performance grade: Excellent (≥10 tok/s)
+    - Memory efficiency: Excellent (<100MB)
+
+
+D  === INFERENCE PERFORMANCE ANALYSIS ===
+D  🤖 Inference Metrics:
+D     - Total time: 7308ms
+D     - Tokens generated: 39
+D     - Speed: 5.34 tokens/sec
+D     - Avg time per token: 187.38ms
+D     - Model: Qwen3
+D     - Thinking mode: false
+D     - Context length: 1709 chars
+D     - Memory usage: 53MB
+D     - Performance grade: Good (5-10 tok/s)
+D     - Memory efficiency: Excellent (<100MB)
+D  === TOTAL MOBILE PERFORMANCE SUMMARY ===
+D  🏆 Complete RAG + Inference Analysis:
+D     - Total time: 7323ms
+D     - RAG search: 0ms (0.0%)
+D     - Inference: 7308ms (99.8%)
+D     - Total tokens: 39
+D     - Overall speed: 5.34 tokens/sec
+D     - Memory usage: 53MB
+D     - Model: Qwen3
+D     - RAG enabled: false
+D     - Overall grade: Good
+
+D  === INFERENCE PERFORMANCE ANALYSIS ===
+D  🤖 Inference Metrics:
+D     - Total time: 9575ms
+D     - Tokens generated: 37
+D     - Speed: 3.86 tokens/sec
+D     - Avg time per token: 258.78ms
+D  📱 Mobile Performance:
+D     - Model: Qwen3
+D     - Thinking mode: false
+D     - Context length: 2399 chars
+D     - Memory usage: 54MB
+D     - Performance grade: Fair (2-5 tok/s)
+D     - Memory efficiency: Excellent (<100MB)
+D  === TOTAL MOBILE PERFORMANCE SUMMARY ===
+- Overall grade: Fair
+
+No Rag but long context
+
+D  === INFERENCE PERFORMANCE ANALYSIS ===
+D  🤖 Inference Metrics:
+D     - Total time: 17987ms
+D     - Tokens generated: 41
+D     - Speed: 2.28 tokens/sec
+D     - Avg time per token: 438.71ms
+D  📱 Mobile Performance:
+D     - Model: Qwen3
+D     - Thinking mode: false
+D     - Context length: 3118 chars
+D     - Memory usage: 132MB
+D     - Performance grade: Fair (2-5 tok/s)
+
+
+
+Rag on
+=== SEARCH PERFORMANCE ANALYSIS ===
+- Total time: 18ms
+- Keyword scan: 0ms (0.0%)
+D     - Embedding similarity: 6ms (33.3%)
+D     - Sorting/reranking: 12ms (66.7%)
+D  📈 Throughput:
+D     - Chunks scanned: 923
+D     - Embeddings processed: 923
+D     - Scan speed: 51277.77777777778 chunks/sec
+D     - Embedding ops: 5.9072E7 ops/sec
+D  === INFERENCE PERFORMANCE ANALYSIS ===
+D  🤖 Inference Metrics:
+D     - Total time: 15412ms
+D     - Tokens generated: 37
+D     - Speed: 2.40 tokens/sec
+D     - Avg time per token: 416.54ms
+D  📱 Mobile Performance:
+D     - Model: Qwen3
+D     - Thinking mode: false
+D     - Context length: 3118 chars
+D     - Memory usage: 70MB
+D     - Performance grade: Fair (2-5 tok/s)
+D     - Memory efficiency: Excellent (<100MB)
+D  === TOTAL MOBILE PERFORMANCE SUMMARY ===
+D  🏆 Complete RAG + Inference Analysis:
+D     - Total time: 15447ms
+D     - RAG search: 19ms (0.1%)
+D     - Total tokens: 37
+D     - Overall speed: 2.40 tokens/sec
+D     - Memory usage: 70MB
+D     - Model: Qwen3
+D     - RAG enabled: true
+D     - Overall grade: Fair
