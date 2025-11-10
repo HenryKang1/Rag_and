@@ -42,7 +42,7 @@ static std::string common_token_to_piece(
     } else {
         result.resize(n_tokens);
     }
-    return std::string(result.data(), result.size());
+    return std::s57tring(result.data(), result.size());
 }
 
 void
@@ -146,6 +146,7 @@ LLMInference::addChatMessage(const char* message, const char* role) {
 
 float
 LLMInference::getResponseGenerationTime() const {
+    if (_responseGenerationTime <= 0) return 0.0f;
     return (float)_responseNumTokens / (_responseGenerationTime / 1e6);
 }
 
@@ -156,6 +157,21 @@ LLMInference::getContextSizeUsed() const {
 
 void
 LLMInference::startCompletion(const char* query) {
+    // Reset metrics
+    _responseGenerationTime = 0;
+    _responseNumTokens      = 0;
+    _prefillTimeUs = 0;
+    _decodeTimeUs = 0;
+    _tPrefillStartUs = 0;
+    _firstTokenLatencyUs = 0;
+    _firstTokenLogged = false;
+    _currPos = 0;  // 위치 초기화
+    
+    // Check if prompt already contains chat template tags (from Kotlin buildRAGPrompt)
+    const std::string q(query ? query : "");
+    const bool has_chat_tags = q.find("<|im_start|>") != std::string::npos || 
+                               q.find("<|im_end|>") != std::string::npos;
+    
     if (!_storeChats) {
         _prevLen = 0;
         _formattedMessages.clear();
@@ -164,30 +180,31 @@ LLMInference::startCompletion(const char* query) {
         // Clear KV cache for fresh start
         llama_memory_clear(llama_get_memory(_ctx), 0);
     }
-    _responseGenerationTime = 0;
-    _responseNumTokens      = 0;
-    // reset detailed perf metrics
-    _prefillTimeUs = 0;
-    _decodeTimeUs = 0;
-    _tPrefillStartUs = 0;
-    _firstTokenLatencyUs = 0;
-    _firstTokenLogged = false;
-    _currPos = 0;  // 위치 초기화
-    addChatMessage(query, "user");
-    // apply the chat-template
-    int newLen = llama_chat_apply_template(_chatTemplate, _messages.data(), _messages.size(), true,
-                                           _formattedMessages.data(), _formattedMessages.size());
-    if (newLen > (int)_formattedMessages.size()) {
-        // resize the output buffer `_formattedMessages`
-        // and re-apply the chat template
-        _formattedMessages.resize(newLen);
-        newLen = llama_chat_apply_template(_chatTemplate, _messages.data(), _messages.size(), true,
-                                           _formattedMessages.data(), _formattedMessages.size());
+    
+    std::string prompt;
+    if (has_chat_tags) {
+        // Already formatted prompt from Kotlin (buildRAGPrompt), use as-is
+        prompt = q;
+        LOGi("[PROMPT] Using pre-formatted prompt with chat template tags (length: %zu)", prompt.length());
+    } else {
+        // Apply chat template to raw user message
+        addChatMessage(query, "user");
+        int newLen = llama_chat_apply_template(_chatTemplate, _messages.data(), _messages.size(), true,
+                                               _formattedMessages.data(), _formattedMessages.size());
+        if (newLen > (int)_formattedMessages.size()) {
+            // resize the output buffer `_formattedMessages`
+            // and re-apply the chat template
+            _formattedMessages.resize(newLen);
+            newLen = llama_chat_apply_template(_chatTemplate, _messages.data(), _messages.size(), true,
+                                               _formattedMessages.data(), _formattedMessages.size());
+        }
+        if (newLen < 0) {
+            throw std::runtime_error("llama_chat_apply_template() in LLMInference::startCompletion() failed");
+        }
+        prompt.assign(_formattedMessages.begin() + _prevLen, _formattedMessages.begin() + newLen);
+        LOGi("[PROMPT] Applied chat template to user message (length: %zu)", prompt.length());
     }
-    if (newLen < 0) {
-        throw std::runtime_error("llama_chat_apply_template() in LLMInference::startCompletion() failed");
-    }
-    std::string prompt(_formattedMessages.begin() + _prevLen, _formattedMessages.begin() + newLen);
+    
     _promptTokens = common_tokenize(llama_model_get_vocab(_model), prompt, true, true);
 
     // 프리필을 n_batch 크기로 청크 나눠 처리 (성능 최적화)
@@ -200,19 +217,29 @@ LLMInference::startCompletion(const char* query) {
     
     // 프리필이 n_batch보다 작거나 같으면 한 번에 처리
     if (n_prompt_tokens <= n_batch) {
-        _batch = llama_batch_get_one(_promptTokens.data(), n_prompt_tokens);
+        // Properly initialize batch instead of using llama_batch_get_one
+        llama_batch batch = llama_batch_init(n_prompt_tokens, 0, 1);
+        for (int i = 0; i < n_prompt_tokens; ++i) {
+            batch.token[i] = _promptTokens[i];
+            batch.pos[i] = i;
+            batch.seq_id[i][0] = 0;
+            batch.n_seq_id[i] = 1;
+            batch.logits[i] = (i == n_prompt_tokens - 1); // Only last token needs logits
+        }
+        batch.n_tokens = n_prompt_tokens;
+        
         auto chunk_start = ggml_time_us();
-        int decode_result = llama_decode(_ctx, _batch);
+        int decode_result = llama_decode(_ctx, batch);
         auto chunk_end = ggml_time_us();
         
         if (decode_result < 0) {
             LOGe("[PERF] PREFILL failed, result=%d", decode_result);
-            llama_batch_free(_batch);
+            llama_batch_free(batch);
             throw std::runtime_error("llama_decode() failed during prefill");
         }
         
         _prefillTimeUs = chunk_end - chunk_start;
-        llama_batch_free(_batch);
+        llama_batch_free(batch);
     } else {
         // 큰 프리필을 청크로 나눠 처리 (llama_batch_init으로 재사용 가능한 배치 생성)
         llama_batch batch = llama_batch_init(n_batch, 0, 1);

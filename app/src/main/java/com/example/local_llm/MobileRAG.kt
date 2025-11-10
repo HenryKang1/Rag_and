@@ -444,7 +444,8 @@ class MobileRAG(private val context: Context) {
         LoggingUtils.logLongText(TAG, "[RAG DEBUG] Context", context, Constants.Logging.CONTEXT_CHUNK_SIZE)
         LoggingUtils.logSectionEnd(TAG, "GET CONTEXT")
         
-        return@withContext if (context.isNotEmpty()) "Context:\n$context" else ""
+        // Return pure context without "Context:" prefix (buildRAGPrompt will add it)
+        return@withContext context
     }
     
     /**

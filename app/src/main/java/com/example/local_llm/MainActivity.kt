@@ -170,8 +170,8 @@ class MainActivity : AppCompatActivity() {
         messages.add(Message("⏳ Please wait, the model is loading.", isUser = false))
         chatAdapter.notifyItemInserted(messages.size - 1)
 
-        // Load default model
-        loadDefaultModel()
+        // Note: Model loading is handled in onCreate() to avoid duplicate calls
+        // loadDefaultModel() is called once in onCreate()
 
         sendButton.setOnClickListener {
             val userPrompt = inputEditText.text.toString().trim()
