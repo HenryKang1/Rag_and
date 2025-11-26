@@ -42,7 +42,7 @@ static std::string common_token_to_piece(
     } else {
         result.resize(n_tokens);
     }
-    return std::s57tring(result.data(), result.size());
+    return std::string(result.data(), result.size());
 }
 
 void
