@@ -52,10 +52,11 @@ class LlamaCppModel(private val context: Context) {
      */
     suspend fun loadModel(
         modelFileName: String,
-        contextSize: Int = 4096,
-        nThreads: Int = 4,
-        temperature: Float = 0.7f,
-        minP: Float = 0.05f
+        contextSize: Int = Constants.Model.CONTEXT_SIZE,
+        nBatch: Int = Constants.Model.BATCH_SIZE_DEFAULT,
+        nThreads: Int = Constants.Model.N_THREADS,
+        temperature: Float = Constants.Model.TEMPERATURE,
+        minP: Float = Constants.Model.MIN_P
     ) = withContext(Dispatchers.IO) {
         try {
             // Copy model from assets to internal storage
@@ -65,6 +66,7 @@ class LlamaCppModel(private val context: Context) {
             nativePtr = nativeLoadModel(
                 modelFile.absolutePath,
                 contextSize,
+                nBatch,
                 nThreads,
                 temperature,
                 minP
@@ -87,8 +89,13 @@ class LlamaCppModel(private val context: Context) {
      */
     fun generateResponseStream(
         prompt: String,
-        maxTokens: Int = 512
+        maxTokens: Int = 512,
+        retrievalTimeMs: Long = 0,
+        overheadTimeMs: Long = 0
     ): Flow<String> = flow {
+        val startTime = System.nanoTime()
+        var firstTokenTime = 0L
+        
         if (!isModelLoaded) {
             throw IllegalStateException("Model not loaded")
         }
@@ -115,6 +122,10 @@ class LlamaCppModel(private val context: Context) {
             while (tokenCount < maxTokens && currentCoroutineContext().isActive) {
                 val token = nativeGetNextToken(nativePtr)
                 
+                if (tokenCount == 0) {
+                    firstTokenTime = System.nanoTime()
+                }
+                
                 // Debug logging
                 if (tokenCount < 5 || tokenCount % 50 == 0) {
                     Log.d(TAG, "[GENERATION DEBUG] Token $tokenCount: '$token' (empty: ${token.isEmpty()})")
@@ -129,10 +140,40 @@ class LlamaCppModel(private val context: Context) {
             }
             Log.d(TAG, "[GENERATION DEBUG] Token streaming completed. Total tokens: $tokenCount")
         } finally {
-            // IMPORTANT: Reset context after each generation to free memory
-            Log.d(TAG, "[GENERATION DEBUG] Resetting model context to free memory")
-            nativeReset(nativePtr)
+            val endTime = System.nanoTime()
+            
+            // Calculate metrics
+            val totalTimeMs = (endTime - startTime) / 1_000_000
+            val prefillTimeMs = if (firstTokenTime > 0) (firstTokenTime - startTime) / 1_000_000 else 0
+            val decoderTimeMs = if (firstTokenTime > 0) (endTime - firstTokenTime) / 1_000_000 else 0
+            
+            // Calculate TPS based on decoder time (excluding prefill)
+            val tps = if (decoderTimeMs > 0 && tokenCount > 1) {
+                (tokenCount - 1) * 1000.0 / decoderTimeMs
+            } else {
+                0.0
+            }
+
+            // Calculate Memory Usage (Approximate Java Heap)
+            val memoryUsage = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / 1024 / 1024
+            
+            // Check if RAG was enabled (based on prompt content)
+            val isRagEnabled = prompt.contains("Context:", ignoreCase = true)
+
+            Log.i("PerformanceMetrics", "========== PERFORMANCE REPORT ==========")
+            Log.i("PerformanceMetrics", "Total generation time: ${totalTimeMs}ms")
+            Log.i("PerformanceMetrics", "Prefill: ${prefillTimeMs}ms")
+            Log.i("PerformanceMetrics", "Decoder: ${decoderTimeMs}ms")
+            Log.i("PerformanceMetrics", "Retrieval time: ${retrievalTimeMs}ms")
+            Log.i("PerformanceMetrics", "Overhead time: ${overheadTimeMs}ms")
+            Log.i("PerformanceMetrics", "Total tokens: $tokenCount")
+            Log.i("PerformanceMetrics", "TPS: $tps")
+            Log.i("PerformanceMetrics", "Rag enabled: $isRagEnabled")
+            Log.i("PerformanceMetrics", "Memory usage: ${memoryUsage}MB (Java Heap)")
+            Log.i("PerformanceMetrics", "========================================")
+
         }
+
         
         Log.d(TAG, "[GENERATION DEBUG] Generation completed with $tokenCount tokens")
         Log.d(TAG, "[GENERATION DEBUG] ========== STREAM GENERATION END ===========")
@@ -305,6 +346,7 @@ $question<|im_end|>
     private external fun nativeLoadModel(
         modelPath: String,
         contextSize: Int,
+        nBatch: Int,
         nThreads: Int,
         temperature: Float,
         minP: Float

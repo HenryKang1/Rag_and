@@ -43,13 +43,17 @@ class MainActivity : AppCompatActivity() {
     internal var forceMaxTokens = 0  // 0 = auto, or specific value to override
     
     // Model selection
-    internal var selectedModel = Constants.Model.DEFAULT_MODEL  // Default model
+    internal var selectedModel = "qwen3-0.6b-q4_k_m.gguf"  // Default model
     private val availableModels = listOf(
+        "qwen3-0.6b-q4_k_m.gguf",
         "Qwen3-0.6B-Q8_0.gguf",
         "Huihui-qwen3-0.6b-abliterated-v2.Q6_K2.gguf"
     )
 
     private val END_TOKEN_IDS = Constants.Token.END_TOKEN_IDS
+    
+    // Batch processing setting
+    private var batchSize = Constants.Model.BATCH_SIZE_DEFAULT
 
     internal lateinit var chatRecyclerView: RecyclerView
     internal lateinit var chatAdapter: ChatAdapter
@@ -58,7 +62,6 @@ class MainActivity : AppCompatActivity() {
     // UI elements
     internal lateinit var thinkingToggle: CheckBox
     internal lateinit var ragToggle: CheckBox
-    internal lateinit var languageBlockToggle: CheckBox
     internal lateinit var uploadButton: Button
     internal lateinit var clearIndexButton: Button
     internal lateinit var inputEditText: EditText
@@ -94,6 +97,10 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton(getString(R.string.yes)) { _, _ ->
                         messages.clear()
                         chatAdapter.clearAll()
+                        // Also reset the model context
+                        if (::llamaModel.isInitialized) {
+                            llamaModel.reset()
+                        }
                     }
                     .setNegativeButton(getString(R.string.cancel), null)
                     .show()
@@ -101,6 +108,37 @@ class MainActivity : AppCompatActivity() {
             }
             R.id.menu_model -> {
                 showModelSelectionDialog()
+                true
+            }
+            R.id.menu_batch_settings -> {
+                val batchOptions = arrayOf("1 (Sequential, Slow)", "128", "256", "512", "1024 (Batched, Fast)")
+                val batchValues = intArrayOf(1, 128, 256, 512, 1024)
+                
+                // Find current selection index
+                var currentIndex = batchValues.indexOf(batchSize)
+                if (currentIndex == -1) currentIndex = 4 // Default to 1024 if unknown
+                
+                AlertDialog.Builder(ContextThemeWrapper(this, R.style.DarkAlertDialog))
+                    .setTitle("Select Batch Size (Prefill)")
+                    .setSingleChoiceItems(batchOptions, currentIndex) { dialog, which ->
+                        val selectedSize = batchValues[which]
+                        if (batchSize != selectedSize) {
+                            batchSize = selectedSize
+                            Toast.makeText(this, "Batch size set to $batchSize. Reloading model...", Toast.LENGTH_SHORT).show()
+                            loadSelectedModel() // Reload to apply
+                        }
+                        dialog.dismiss()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+                true
+            }
+            R.id.menu_block_foreign -> {
+                item.isChecked = !item.isChecked
+                tokenizer.setLanguageBlocking(item.isChecked)
+                llamaModel.setLanguageBlocking(item.isChecked)
+                val message = if (item.isChecked) "🚫 Language blocking enabled" else "🌍 Language blocking disabled"
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -208,6 +246,9 @@ class MainActivity : AppCompatActivity() {
             toggleGenerating(true)
             
             inferenceJob = inferenceScope.launch {
+                val jobStartTime = System.nanoTime() // Start tracking overhead time
+                var retrievalTimeMs = 0L
+
                 // Wait for previous job to finish cancelling
                 previousJob?.join()
                 // Log memory status before inference
@@ -240,6 +281,7 @@ class MainActivity : AppCompatActivity() {
                 var finalPrompt = userPrompt
                 var contextTime = 0L  // RAG 검색 시간을 저장할 변수
                 if (isRagEnabled && ragInitialized) {
+                    val retrievalStart = System.nanoTime()
                     LoggingUtils.logSectionStart("MainActivity", "RAG CONTEXT RETRIEVAL")
                     LoggingUtils.logContextDebug("MainActivity", "RAG enabled: $isRagEnabled, RAG initialized: $ragInitialized")
                     LoggingUtils.logContextDebug("MainActivity", "User query: '$userPrompt'")
@@ -269,6 +311,10 @@ class MainActivity : AppCompatActivity() {
                         )
                         val contextEndTime = System.currentTimeMillis()
                         contextTime = contextEndTime - contextStartTime
+                        
+                        // Calculate retrieval time in ms for PerformanceMetrics
+                        retrievalTimeMs = (System.nanoTime() - retrievalStart) / 1_000_000
+                        Log.i("PerformanceMetrics", "RAG Retrieval time: ${retrievalTimeMs}ms")
                         
                         LoggingUtils.logContextDebug("MainActivity", "=== RAG SEARCH RESULTS ===")
                         LoggingUtils.logContextDebug("MainActivity", "- Length: ${context.length} chars")
@@ -343,6 +389,8 @@ class MainActivity : AppCompatActivity() {
                     qaPrompt
                 }
                 LoggingUtils.logSectionEnd("MainActivity", "PROMPT BUILDING")
+                val promptBuildingEndTime = System.currentTimeMillis()
+                val promptBuildingTime = promptBuildingEndTime - promptStartTime
                 
                 // Check if thinking mode is actually being used
                 val actualThinkingMode = config.IsThinkingModeAvailable && thinkingToggle.isChecked
@@ -365,6 +413,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val botIndex = messages.lastIndex
                 var tokenCounter = 0
+                var firstTokenArrivalTime = 0L  // 첫 토큰 도착 시간 추적
                 try {
                     // Check if thinking mode is enabled
                     val isThinkingMode = config.IsThinkingModeAvailable && thinkingToggle.isChecked
@@ -373,6 +422,8 @@ class MainActivity : AppCompatActivity() {
                     
                     var tokenCount = 0
                     
+                    // PREFILL 전 준비 시간 측정 시작 (JNI 호출, 토큰화 등)
+                    val preInferenceStartTime = System.currentTimeMillis()
                     val generationStartTime = System.currentTimeMillis()
                     LoggingUtils.logGenerationDebug("MainActivity", "=== INFERENCE PERFORMANCE ANALYSIS ===")
                     LoggingUtils.logGenerationDebug("MainActivity", "Starting generation with prompt of ${prompt.length} chars")
@@ -383,13 +434,29 @@ class MainActivity : AppCompatActivity() {
                     LoggingUtils.logGenerationDebug("MainActivity", "Context size: ${Constants.Model.CONTEXT_SIZE}")
                     LoggingUtils.logGenerationDebug("MainActivity", "Threads: ${Constants.Model.N_THREADS}")
                     
+                    // Calculate overhead time right before generation starts
+                    val overheadTimeMs = (System.nanoTime() - jobStartTime) / 1_000_000
+                    
                     // Track if we're inside thinking tags
                     var insideThinkingTag = false
                     val filteredBuilder = StringBuilder(modeIndicator)
                     val tokenBuffer = StringBuilder()  // Buffer to handle split tokens
                     
                     LoggingUtils.logGenerationDebug("MainActivity", "Starting token collection...")
-                    llamaModel.generateResponseStream(prompt, maxTokens = maxGenerationTokens).collect { token ->
+                    val jniCallStartTime = System.currentTimeMillis()
+                    var firstTokenArrivalTime = 0L
+                    llamaModel.generateResponseStream(
+                        prompt, 
+                        maxTokens = maxGenerationTokens,
+                        retrievalTimeMs = retrievalTimeMs,
+                        overheadTimeMs = overheadTimeMs
+                    ).collect { token ->
+                        // 첫 토큰이 도착하면 PREFILL이 완료된 것으로 간주
+                        if (tokenCount == 0) {
+                            firstTokenArrivalTime = System.currentTimeMillis()
+                            val prefillPrepTime = firstTokenArrivalTime - jniCallStartTime
+                            LoggingUtils.logGenerationDebug("MainActivity", "⏱️ PREFILL 완료 및 첫 토큰 도착: ${prefillPrepTime}ms")
+                        }
                         tokenCount++
                         
                         // Log first few tokens to debug
@@ -430,12 +497,24 @@ class MainActivity : AppCompatActivity() {
                                     // Inside thinking tags, just clear buffer
                                     tokenBuffer.clear()
                                 }
-                                !insideThinkingTag && !bufferContent.contains("<") -> {
-                                    // Safe to output buffered content
-                                    filteredBuilder.append(tokenBuffer)
-                                    tokenBuffer.clear()
+                                !insideThinkingTag -> {
+                                    // Check if the buffer ends with a partial <think> tag
+                                    // We only need to buffer if we might be in the middle of receiving a <think> tag
+                                    val isPartialTag = bufferContent.endsWith("<") ||
+                                            bufferContent.endsWith("<t") ||
+                                            bufferContent.endsWith("<th") ||
+                                            bufferContent.endsWith("<thi") ||
+                                            bufferContent.endsWith("<thin")
+
+                                    if (!isPartialTag) {
+                                        // Safe to output buffered content
+                                        filteredBuilder.append(tokenBuffer)
+                                        tokenBuffer.clear()
+                                    } else {
+                                        // Potential tag start, keep buffering
+                                    }
                                 }
-                                // If buffer contains "<" but not complete tag, wait for more tokens
+                                // If buffer contains partial tag prefix, wait for more tokens
                             }
                         } else {
                             // In thinking mode, show everything
@@ -499,6 +578,18 @@ class MainActivity : AppCompatActivity() {
                     val ragTime = if (isRagEnabled && ragInitialized) contextTime else 0L
                     val inferenceTime = totalGenerationTime
                     
+                    // PREFILL 전 준비 시간 계산
+                    // 첫 토큰 도착 시간이 측정되었다면 사용, 아니면 추정
+                    val prefillPrepTime = if (firstTokenArrivalTime > 0) {
+                        firstTokenArrivalTime - generationStartTime
+                    } else if (tokenCount > 0) {
+                        // 첫 토큰이 도착한 시간을 추정 (PREFILL 완료 시점)
+                        // 실제로는 LlamaCpp 로그의 FIRST TOKEN latency를 참조해야 하지만,
+                        // 여기서는 대략적으로 추정
+                        val estimatedFirstTokenTime = generationStartTime + (totalGenerationTime * 0.8).toLong()
+                        estimatedFirstTokenTime - generationStartTime
+                    } else 0L
+                    
                     // PerformanceLogger를 사용한 전체 성능 요약
                     PerformanceLogger.logTotalPerformance(
                         totalTime = totalTime,
@@ -508,7 +599,9 @@ class MainActivity : AppCompatActivity() {
                         tokensPerSecond = tokensPerSecond,
                         memoryUsageMB = memoryUsageMB,
                         modelName = config.modelName,
-                        ragEnabled = isRagEnabled
+                        ragEnabled = isRagEnabled,
+                        promptBuildingTime = promptBuildingTime,
+                        prefillPrepTime = prefillPrepTime
                     )
                     
                     LoggingUtils.logSectionEnd("MainActivity", "TOTAL RAG + INFERENCE PERFORMANCE")
@@ -710,6 +803,21 @@ class MainActivity : AppCompatActivity() {
         )
         
         return when (modelPath) {
+            "qwen3-0.6b-q4_k_m.gguf" -> ModelConfig(
+                modelName = "Qwen3 (q4_k_m)",
+                promptStyle = PromptStyle.QWEN3,
+                modelPath = modelPath,
+                eosTokenIds = END_TOKEN_IDS,
+                numLayers = 28,
+                numKvHeads = 8,
+                headDim = 128,
+                batchSize = 1,
+                defaultSystemPrompt = "You are Qwen. You are a helpful assistant. Please answer briefly and concisely.",
+                roleTokenIds = roleTokens,
+                scalarPosId = true,
+                dtype = "float16",
+                IsThinkingModeAvailable = true
+            )
             "Qwen3-0.6B-Q8_0.gguf" -> ModelConfig(
                 modelName = "Qwen3",
                 promptStyle = PromptStyle.QWEN3,
@@ -719,7 +827,7 @@ class MainActivity : AppCompatActivity() {
                 numKvHeads = 8,
                 headDim = 128,
                 batchSize = 1,
-                defaultSystemPrompt = "You are Qwen. You are a helpful assistant",
+                defaultSystemPrompt = "You are Qwen. You are a helpful assistant. Please answer briefly and concisely.",
                 roleTokenIds = roleTokens,
                 scalarPosId = true,
                 dtype = "float16",
@@ -750,6 +858,7 @@ class MainActivity : AppCompatActivity() {
     private fun showModelSelectionDialog() {
         val modelNames = availableModels.map { modelPath ->
             when (modelPath) {
+                "qwen3-0.6b-q4_k_m.gguf" -> "Qwen3 (q4_k_m) - Optimized"
                 "Qwen3-0.6B-Q8_0.gguf" -> "Qwen3 (General Assistant)"
                 "Huihui-qwen3-0.6b-abliterated-v2.Q6_K2.gguf" -> "Huihui (Emotional Companion)"
                 else -> modelPath
@@ -795,6 +904,7 @@ class MainActivity : AppCompatActivity() {
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
                     contextSize = Constants.Model.CONTEXT_SIZE,
+                    nBatch = batchSize,
                     nThreads = Constants.Model.N_THREADS,
                     temperature = Constants.Model.TEMPERATURE,
                     minP = Constants.Model.MIN_P
@@ -848,6 +958,7 @@ class MainActivity : AppCompatActivity() {
                 llamaModel.loadModel(
                     modelFileName = selectedModel,
                     contextSize = Constants.Model.CONTEXT_SIZE,
+                    nBatch = batchSize,
                     nThreads = Constants.Model.N_THREADS,
                     temperature = Constants.Model.TEMPERATURE,
                     minP = Constants.Model.MIN_P

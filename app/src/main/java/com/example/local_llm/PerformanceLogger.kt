@@ -134,13 +134,23 @@ object PerformanceLogger {
         tokensPerSecond: Double,
         memoryUsageMB: Long,
         modelName: String,
-        ragEnabled: Boolean
+        ragEnabled: Boolean,
+        promptBuildingTime: Long = 0L,
+        prefillPrepTime: Long = 0L
     ) {
         Log.d(TAG, "=== TOTAL MOBILE PERFORMANCE SUMMARY ===")
         Log.d(TAG, "🏆 Complete RAG + Inference Analysis:")
         Log.d(TAG, "   - Total time: ${totalTime}ms")
         Log.d(TAG, "   - RAG search: ${ragTime}ms (${String.format("%.1f", ragTime * 100.0 / totalTime)}%)")
-        Log.d(TAG, "   - Inference: ${inferenceTime}ms (${String.format("%.1f", inferenceTime * 100.0 / totalTime)}%)")
+        if (promptBuildingTime > 0) {
+            Log.d(TAG, "   - Prompt building: ${promptBuildingTime}ms (${String.format("%.1f", promptBuildingTime * 100.0 / totalTime)}%)")
+        }
+        if (prefillPrepTime > 0) {
+            Log.d(TAG, "   - PREFILL 수행 (Native): ${prefillPrepTime}ms (${String.format("%.1f", prefillPrepTime * 100.0 / totalTime)}%)")
+            Log.d(TAG, "     ℹ️ JNI 호출 및 C++ 내부의 실제 Prefill 연산이 포함된 시간입니다.")
+        }
+        Log.d(TAG, "   - Inference (Decode): ${inferenceTime}ms (${String.format("%.1f", inferenceTime * 100.0 / totalTime)}%)")
+        Log.d(TAG, "     └─ 답변 생성 시간 (첫 토큰 이후)")
         Log.d(TAG, "   - Total tokens: $tokenCount")
         Log.d(TAG, "   - Overall speed: ${String.format("%.2f", tokensPerSecond)} tokens/sec")
         Log.d(TAG, "   - Memory usage: ${memoryUsageMB}MB")
@@ -155,6 +165,15 @@ object PerformanceLogger {
             else -> "Needs Optimization"
         }
         Log.d(TAG, "   - Overall grade: $overallGrade")
+        
+        // 시간 괴리 분석
+        if (prefillPrepTime > 0 && inferenceTime > prefillPrepTime) {
+            val decodeTime = inferenceTime - prefillPrepTime
+            Log.d(TAG, "   📊 상세 시간 분석:")
+            Log.d(TAG, "      1. Prefill (문맥 이해): ${prefillPrepTime}ms")
+            Log.d(TAG, "      2. Decode (답변 생성): ${decodeTime}ms")
+            Log.d(TAG, "      3. 총 소요 시간: ${inferenceTime}ms")
+        }
     }
     
     /**

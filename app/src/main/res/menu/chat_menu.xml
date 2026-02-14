@@ -20,4 +20,16 @@
         android:icon="@android:drawable/ic_menu_preferences"
         app:showAsAction="never" />
 
+    <item
+        android:id="@+id/menu_batch_settings"
+        android:title="Batch Processing"
+        android:icon="@android:drawable/ic_menu_manage"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/menu_block_foreign"
+        android:title="Block Foreign (CJK)"
+        android:checkable="true"
+        app:showAsAction="never" />
+
 </menu>

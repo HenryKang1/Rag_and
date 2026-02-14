@@ -48,9 +48,9 @@ class LLMInference {
     bool _isValidUtf8(const char* response);
 
   public:
-    void loadModel(const char* modelPath, float minP, float temperature, bool storeChats, long contextSize,
+    void loadModel(const char* modelPath, float minP, float temperature, bool storeChats, long contextSize, int nBatch,
                    const char* chatTemplate, int nThreads, bool useMmap, bool useMlock, float topP, int topK,
-                   float xtcP, float xtcT);
+                   float xtcP = 0.0f, float xtcT = 0.0f);
 
     void addChatMessage(const char* message, const char* role);
 

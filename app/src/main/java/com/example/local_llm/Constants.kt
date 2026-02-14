@@ -8,8 +8,10 @@ object Constants {
     // Model Configuration - Optimized for speed
     object Model {
         const val DEFAULT_MODEL = "Qwen3-0.6B-Q8_0.gguf"
-        const val CONTEXT_SIZE = 2048  // Restored for proper functioning
-        const val N_THREADS = 8      // Increased for better parallelization
+        const val CONTEXT_SIZE = 2048
+    const val BATCH_SIZE_DEFAULT = 1024
+    const val BATCH_SIZE_OFF = 1
+        const val N_THREADS = 4      // Reduced to avoid thermal throttling
         const val TEMPERATURE = 0.4f   // Balanced for speed and quality
         const val MIN_P = 0.05f       // Balanced for speed and quality
     }

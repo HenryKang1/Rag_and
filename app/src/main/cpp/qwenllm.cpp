@@ -48,6 +48,7 @@ Java_com_example_local_1llm_LlamaCppModel_nativeLoadModel(
     JNIEnv *env, jobject /* this */,
     jstring model_path,
     jint context_size,
+    jint n_batch,
     jint n_threads,
     jfloat temperature,
     jfloat min_p) {
@@ -67,8 +68,8 @@ Java_com_example_local_1llm_LlamaCppModel_nativeLoadModel(
     }
     
     LOGI("Loading model from: %s", path);
-    LOGI("Parameters: context_size=%d, n_threads=%d, temp=%f, min_p=%f", 
-         context_size, n_threads, temperature, min_p);
+    LOGI("Parameters: context_size=%d, n_batch=%d, n_threads=%d, temp=%f, min_p=%f", 
+         context_size, n_batch, n_threads, temperature, min_p);
     
     // Check if file exists
     FILE *file = fopen(path, "r");
@@ -106,6 +107,7 @@ Java_com_example_local_1llm_LlamaCppModel_nativeLoadModel(
                 temperature,
                 false, // store_chats - set to false for single-turn QA
                 context_size,
+                n_batch,
                 chat_template,
                 n_threads,
                 true,  // use_mmap
@@ -243,21 +245,51 @@ Java_com_example_local_1llm_LlamaCppModel_nativeGetNextToken(
         }
         
         LOGI("Calling completionLoop...");
-        std::string token = safeInference->inference->completionLoop();
-        LOGI("completionLoop returned: '%s' (length=%zu)", token.c_str(), token.length());
-        
-        // Check for end of generation
-        if (token == "[EOG]" || token.empty()) {
-            LOGI("Generation completed, cleaning up context");
-            try {
-                safeInference->inference->stopCompletion();
-            } catch (const std::exception &e) {
-                LOGW("Error stopping completion: %s", e.what());
+        // Loop until we get a valid UTF-8 token or EOG
+        // Partial UTF-8 tokens return empty string from completionLoop, but we shouldn't stop generation
+        std::string token;
+        int safety_counter = 0;
+        const int MAX_RETRIES = 10; // Max UTF-8 sequence is 4 bytes, so 10 is plenty safe
+
+        while (safety_counter < MAX_RETRIES) {
+            token = safeInference->inference->completionLoop();
+            safety_counter++;
+            
+            // Check for end of generation
+            if (token == "[EOG]") {
+                LOGI("Generation completed (EOG), cleaning up context");
+                try {
+                    safeInference->inference->stopCompletion();
+                } catch (const std::exception &e) {
+                    LOGW("Error stopping completion: %s", e.what());
+                }
+                safeInference->isGenerating = false;
+                return env->NewStringUTF("");
             }
-            safeInference->isGenerating = false;
-            return env->NewStringUTF("");
+            
+            // If we got a valid token string, return it
+            if (!token.empty()) {
+                 break;
+            }
+            
+            // If token is empty but not EOG, it means we have a partial UTF-8 sequence (e.g. split Korean char)
+            // We need to loop again to generate the next token and complete the sequence
+            // completionLoop() accumulates partial bytes in _cacheResponseTokens
+            
+            // Safety check: ensure we don't loop if generation was stopped elsewhere
+            if (!safeInference->isGenerating) {
+                return env->NewStringUTF("");
+            }
         }
         
+        if (safety_counter >= MAX_RETRIES && token.empty()) {
+             LOGW("Partial UTF-8 reconstruction timed out after %d retries", MAX_RETRIES);
+             // Return what we have or empty string to avoid crash
+             return env->NewStringUTF(""); 
+        }
+        
+        LOGI("completionLoop returned valid token: '%s' (length=%zu)", token.c_str(), token.length());
+
         // Create Java string and check for exceptions
         jstring result = env->NewStringUTF(token.c_str());
         if (checkJNIException(env, "NewStringUTF")) {

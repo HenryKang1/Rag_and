@@ -46,7 +46,7 @@ static std::string common_token_to_piece(
 }
 
 void
-LLMInference::loadModel(const char* model_path, float minP, float temperature, bool storeChats, long contextSize,
+LLMInference::loadModel(const char* model_path, float minP, float temperature, bool storeChats, long contextSize, int nBatch,
                         const char* chatTemplate, int nThreads, bool useMmap, bool useMlock, float topP, int topK,
                         float xtcP, float xtcT) {
     LOGi("loading model with"
@@ -55,6 +55,7 @@ LLMInference::loadModel(const char* model_path, float minP, float temperature, b
          "\n\ttemperature = %f"
          "\n\tstoreChats = %d"
          "\n\tcontextSize = %d"
+         "\n\tnBatch = %d"
          "\n\tchatTemplate = %s"
          "\n\tnThreads = %d"
          "\n\tuseMmap = %d"
@@ -63,7 +64,7 @@ LLMInference::loadModel(const char* model_path, float minP, float temperature, b
          "\n\ttopK = %i"
          "\n\txtcP = %f"
          "\n\txtcT = %f",
-         model_path, minP, temperature, (int)storeChats, (int)contextSize, chatTemplate, nThreads, useMmap, useMlock, topP, topK, xtcP, xtcT);
+         model_path, minP, temperature, (int)storeChats, (int)contextSize, nBatch, chatTemplate, nThreads, useMmap, useMlock, topP, topK, xtcP, xtcT);
 
     // create an instance of llama_model
     llama_model_params model_params = llama_model_default_params();
@@ -80,9 +81,21 @@ LLMInference::loadModel(const char* model_path, float minP, float temperature, b
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx                = contextSize;
     ctx_params.n_threads            = nThreads;
+    // Prefill 성능 최적화를 위한 스레드 설정 (Generation 스레드 수와 동일하게 설정)
+    ctx_params.n_threads_batch      = nThreads;
     ctx_params.no_perf              = true; // disable performance metrics
-    // n_batch 설정: 프리필 성능 최적화를 위해 적절한 크기 설정
-    ctx_params.n_batch              = std::min<int>(1024, (int)contextSize);
+    // Flash Attention 활성화 (문맥 처리가 빨라짐)
+    ctx_params.flash_attn_type      = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    
+    // n_batch 설정: 프리필 성능 최적화를 위해 적절한 크기 설정 (또는 1로 설정하여 Sequential 모드)
+    ctx_params.n_batch              = std::min<int>(nBatch, (int)contextSize);
+
+    // [OPTIMIZATION] KV Cache Quantization (Q8_0)
+    // Reduces memory bandwidth usage during prefill, critical for mobile devices.
+    // Q8_0 offers 2x memory reduction vs FP16 with negligible accuracy loss.
+    ctx_params.type_k               = GGML_TYPE_Q8_0;
+    ctx_params.type_v               = GGML_TYPE_Q8_0;
+
     _ctx                            = llama_init_from_model(_model, ctx_params);
 
     if (!_ctx) {

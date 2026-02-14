@@ -32,7 +32,6 @@ class MainActivityExtensions(private val activity: MainActivity) {
         // Initialize UI elements
         activity.thinkingToggle = activity.findViewById(R.id.thinkingToggle)
         activity.ragToggle = activity.findViewById(R.id.ragToggle)
-        activity.languageBlockToggle = activity.findViewById(R.id.languageBlockToggle)
         activity.uploadButton = activity.findViewById(R.id.uploadButton)
         activity.clearIndexButton = activity.findViewById(R.id.clearIndexButton)
         activity.inputEditText = activity.findViewById(R.id.userInput)
@@ -45,12 +44,12 @@ class MainActivityExtensions(private val activity: MainActivity) {
      * UI 이벤트 리스너들을 설정
      */
     private fun setupUIEventListeners() {
-        setupToggles(activity.thinkingToggle, activity.ragToggle, activity.languageBlockToggle)
+        setupToggles(activity.thinkingToggle, activity.ragToggle)
         setupButtons(activity.uploadButton, activity.clearIndexButton, activity.sendButton, activity.stopButton)
         setupInputField(activity.inputEditText)
     }
     
-    private fun setupToggles(thinkingToggle: CheckBox, ragToggle: CheckBox, languageBlockToggle: CheckBox) {
+    private fun setupToggles(thinkingToggle: CheckBox, ragToggle: CheckBox) {
         // Set default to non-thinking mode for better performance
         thinkingToggle.isChecked = false
         
@@ -59,15 +58,6 @@ class MainActivityExtensions(private val activity: MainActivity) {
             activity.isRagEnabled = isChecked
             val message = if (isChecked) activity.getString(R.string.rag_enabled) else activity.getString(R.string.rag_disabled)
             Toast.makeText(activity, message, Toast.LENGTH_SHORT).show()
-        }
-        
-        // Language blocking setup
-        languageBlockToggle.setOnCheckedChangeListener { _, isChecked ->
-            activity.tokenizer.setLanguageBlocking(isChecked)
-            activity.llamaModel.setLanguageBlocking(isChecked)
-            val message = if (isChecked) "🚫 Language blocking enabled (Chinese/Japanese/Korean blocked)" else "🌍 Language blocking disabled"
-            Toast.makeText(activity, message, Toast.LENGTH_LONG).show()
-            LoggingUtils.logRAGDebug("MainActivity", "Language blocking ${if (isChecked) "enabled" else "disabled"}")
         }
     }
     

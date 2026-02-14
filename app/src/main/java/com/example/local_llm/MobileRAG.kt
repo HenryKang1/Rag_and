@@ -429,8 +429,13 @@ class MobileRAG(private val context: Context) {
                 currentTokenCount += chunkTokens
             }
             
+            // [OPTIMIZATION] Selective Context
+            // Filter sentences within the chunk to keep only the most relevant ones.
+            // This reduces prefill latency by removing "fluff" while keeping key information.
+            val filteredChunk = filterRelevantSentences(chunk, query)
+            
             contextBuilder.append(separator)
-            contextBuilder.append(chunk)
+            contextBuilder.append(filteredChunk)
         }
         
         val context = contextBuilder.toString()
@@ -446,6 +451,34 @@ class MobileRAG(private val context: Context) {
         
         // Return pure context without "Context:" prefix (buildRAGPrompt will add it)
         return@withContext context
+    }
+
+    /**
+     * [OPTIMIZATION] Filter sentences to keep only the most relevant ones (Selective Context)
+     */
+    private fun filterRelevantSentences(chunk: String, query: String): String {
+        val sentences = chunk.split(Regex("(?<=[.!?])\\s+"))
+        if (sentences.size <= 2) return chunk // Keep short chunks as is
+
+        val queryWords = query.lowercase().split(Regex("\\s+")).filter { it.length > 3 }.toSet()
+        if (queryWords.isEmpty()) return chunk
+
+        val relevantSentences = sentences.filter { sentence ->
+            val sentenceLower = sentence.lowercase()
+            // Keep sentences that contain query keywords or medical terms
+            queryWords.any { sentenceLower.contains(it) } || 
+            sentenceLower.contains("diagnosis") || 
+            sentenceLower.contains("treatment") ||
+            sentenceLower.contains("symptoms")
+        }
+
+        // Check if we filtered too aggressively (less than 30% left)
+        if (relevantSentences.size < sentences.size * 0.3) {
+             // Return original chunk or at least top 2 sentences if really irrelevant
+             return if (relevantSentences.isNotEmpty()) relevantSentences.joinToString(" ") else sentences.take(2).joinToString(" ")
+        }
+
+        return relevantSentences.joinToString(" ")
     }
     
     /**
