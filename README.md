@@ -19,36 +19,22 @@ An Android application that runs Qwen models locally with Retrieval-Augmented Ge
 
 ## Setup
 
-### 1. Clone the repository with submodules
+### 1. Clone the repository
 
 ```bash
-# Clone the main repository
-git clone https://github.com/your-username/local_llm.git
-cd local_llm/Qwen_QA_style_app
-
-# Initialize and update the llama.cpp submodule
-git submodule update --init --recursive
+git clone https://github.com/HenryKang1/Rag_and.git
+cd Rag_and
 ```
 
-### 2. Verify llama.cpp submodule
+llama.cpp is vendored in `third_party/llama.cpp/`, so no submodule setup is needed.
 
-The app uses llama.cpp as a git submodule located at `third_party/llama.cpp/`. 
-If the submodule is not initialized:
-
-```bash
-cd third_party
-git submodule add https://github.com/ggerganov/llama.cpp.git
-cd ..
-git submodule update --init --recursive
-```
-
-### 3. Place the model file
+### 2. Place the model file
 
 Download a GGUF model file and place it in `app/src/main/assets/`:
 - Recommended: `qwen3-0.6b-q4_k_m.gguf`
 - The model must be under 2GB due to Android asset limitations
 
-### 4. Build the app
+### 3. Build the app
 
 ```bash
 ./gradlew assembleDebug
@@ -90,7 +76,7 @@ Or open the project in Android Studio and build from there.
 ## Project Structure
 
 ```
-Qwen_QA_style_app/
+Rag_and/
 ├── app/
 │   ├── src/
 │   │   ├── main/
@@ -107,13 +93,13 @@ Qwen_QA_style_app/
 │   │   │       └── [place GGUF models here]
 │   └── build.gradle.kts
 ├── third_party/
-│   └── llama.cpp/                          # Git submodule
+│   └── llama.cpp/                          # Vendored llama.cpp
 └── README.md
 ```
 
 ## Dependencies
 
-- llama.cpp (as git submodule)
+- llama.cpp (vendored in `third_party/`)
 - ONNX Runtime Android (for embeddings)
 - PDFBox Android (for PDF processing)
 - Kotlin Coroutines
@@ -122,7 +108,7 @@ Qwen_QA_style_app/
 ## Troubleshooting
 
 ### Build Issues
-- Ensure llama.cpp submodule is properly initialized
+- Ensure `third_party/llama.cpp/` is present
 - Check NDK installation in Android Studio
 - Verify CMake version is 3.22.1+
 
@@ -133,7 +119,7 @@ Qwen_QA_style_app/
 
 ## License
 
-[Your License]
+MIT. See [LICENSE](LICENSE). llama.cpp in `third_party/llama.cpp/` keeps its own MIT license.
 
 ## Acknowledgments
 
